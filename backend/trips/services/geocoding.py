@@ -1,7 +1,8 @@
 """Forward geocoding restricted to the US and Canada.
 
 Photon (komoot) is the primary provider because it is fast and typo-tolerant, which
-suits autocomplete. Nominatim is the fallback when Photon errors or finds nothing.
+suits autocomplete. Nominatim is the fallback when Photon errors or finds nothing, for
+one-shot lookups only: its usage policy forbids autocomplete and allows 1 request/s.
 Results are normalised to ``GeocodeResult`` dicts (``label``, ``short_label``, ``lat``,
 ``lon``) and cached in memory.
 """
@@ -17,7 +18,7 @@ import requests
 from .cache import TTLCache
 from .errors import UpstreamUnavailable
 from .http import Deadline, session
-from .places import nearest_place
+from .places import get_index, nearest_place
 from .regions import country_for_abbrev, region_abbrev, region_name
 
 log = logging.getLogger(__name__)
@@ -35,8 +36,11 @@ _cache: TTLCache[list[dict[str, Any]]] = TTLCache(maxsize=2048, ttl=24 * 3600)
 # Photon "type" values that denote a settlement rather than an address or POI.
 _SETTLEMENT_TYPES = {"city", "town", "village", "hamlet", "locality", "district"}
 
-# Internal flag on Photon results (settlement vs address/POI), removed by ``_dedupe``.
+# Internal keys on Photon results, removed by ``_dedupe``: settlement vs address/POI,
+# and the settlement's state/province abbreviation.
 _IS_PLACE = "_is_place"
+_ABBREV = "_abbrev"
+_SAME_PLACE_MILES = 5.0  # a settlement node this close to a dataset place is that place
 
 
 def _join(*parts: str | None) -> str:
@@ -99,7 +103,30 @@ def _photon_feature(feature: dict[str, Any]) -> dict[str, Any] | None:
     )
     result = _result(label or short, short or label, float(coords[1]), float(coords[0]))
     result[_IS_PLACE] = kind == "state" or props.get("osm_key") == "place"
+    result[_ABBREV] = abbrev
     return result
+
+
+def _population(r: dict[str, Any]) -> int:
+    """Population of a settlement result, from the offline places dataset (0 if unknown)."""
+    found = get_index().nearest(r["lat"], r["lon"], prefer_populous=False)
+    return found[0].population if found and found[1] <= _SAME_PLACE_MILES else 0
+
+
+def _rank_places(q: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order a city search: settlements first, those in a state named in the query
+    ("Dallas, GA") next, then larger places first, so "Chic" offers Chicago before Chico.
+    Addresses and POIs keep Photon's order after the settlements."""
+    _, sep, tail = q.rpartition(",")
+    wanted = region_abbrev(tail) if sep else ""
+
+    def key(item: tuple[int, dict[str, Any]]) -> tuple:
+        i, r = item
+        if not r[_IS_PLACE]:
+            return (1, 0, 0, i)
+        return (0, bool(wanted) and r[_ABBREV] != wanted, -_population(r), i)
+
+    return [r for _, r in sorted(enumerate(results), key=key)]
 
 
 def _photon(q: str, limit: int, deadline: Deadline) -> list[dict[str, Any]]:
@@ -111,10 +138,10 @@ def _photon(q: str, limit: int, deadline: Deadline) -> list[dict[str, Any]]:
     resp.raise_for_status()
     results = [r for r in (_photon_feature(f) for f in resp.json().get("features", [])) if r is not None]
     # Photon ranks POIs named after a city ("St. Louis Lambert International Airport") above the city
-    # itself. A query without digits is almost always a city search, so float settlements to the top
-    # (stable sort keeps Photon's order within each group).
+    # itself, and small towns above big cities ("Chic" -> Chico, CA first). A query without digits is
+    # almost always a city search, so re-rank it.
     if not re.search(r"\d", q):
-        results.sort(key=lambda r: not r[_IS_PLACE])
+        results = _rank_places(q, results)
     return results
 
 
@@ -133,7 +160,8 @@ def _nominatim_item(item: dict[str, Any]) -> dict[str, Any] | None:
     )
     street_line = " ".join(p for p in (addr.get("house_number"), addr.get("road")) if p)
     name = item.get("name") or ""
-    if item.get("addresstype") in {"city", "town", "village", "hamlet", "municipality"} or (not street_line and not name):
+    settlement = item.get("addresstype") in {"city", "town", "village", "hamlet", "municipality"}
+    if settlement or (not street_line and not name):
         short = _join(name or city, abbrev)
     elif item.get("addresstype") == "state":
         short = name or addr.get("state", "")
@@ -161,6 +189,7 @@ def _dedupe(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     for r in results:
         r.pop(_IS_PLACE, None)
+        r.pop(_ABBREV, None)
         label = r["short_label"].lower()
         if not any(
             k["short_label"].lower() == label and abs(k["lat"] - r["lat"]) < 0.08 and abs(k["lon"] - r["lon"]) < 0.08
@@ -170,16 +199,18 @@ def _dedupe(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     return kept[:limit]
 
 
-def geocode(q: str, limit: int = DEFAULT_LIMIT, deadline: Deadline | None = None) -> list[dict[str, Any]]:
+def geocode(
+    q: str, limit: int = DEFAULT_LIMIT, deadline: Deadline | None = None, allow_fallback: bool = True
+) -> list[dict[str, Any]]:
     """Return up to ``limit`` US/CA matches for ``q``.
 
-    Raises ``UpstreamUnavailable`` only when every provider failed; an empty list means
-    the providers answered but found nothing.
+    ``allow_fallback=False`` (autocomplete) uses Photon only. Raises ``UpstreamUnavailable``
+    only when every provider tried failed; an empty list means they answered but found nothing.
     """
     q = _normalise_query(q)
     if len(q) < MIN_QUERY_LEN:
         return []
-    key = (q.lower(), limit)
+    key = (q.lower(), limit, allow_fallback)
     cached = _cache.get(key)
     if cached is not None:
         return cached
@@ -187,7 +218,8 @@ def geocode(q: str, limit: int = DEFAULT_LIMIT, deadline: Deadline | None = None
     deadline = deadline or Deadline(None)
     errors: list[str] = []
     results: list[dict[str, Any]] | None = None
-    for name, provider in (("photon", _photon), ("nominatim", _nominatim)):
+    providers = [("photon", _photon), ("nominatim", _nominatim)][: 2 if allow_fallback else 1]
+    for name, provider in providers:
         if deadline.expired:
             break
         try:
@@ -202,7 +234,8 @@ def geocode(q: str, limit: int = DEFAULT_LIMIT, deadline: Deadline | None = None
 
     if results is None:
         raise UpstreamUnavailable(f"Geocoding service unavailable ({', '.join(errors) or 'timeout'}).")
-    _cache.set(key, results)
+    if results or not errors:  # never cache a "not found" caused by a failing provider
+        _cache.set(key, results)
     return results
 
 

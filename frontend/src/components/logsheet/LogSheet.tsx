@@ -3,6 +3,8 @@
 // can be serialized for SVG/PNG download and printed without app styles.
 
 import type { Ref } from 'react'
+import { DUTY_HEX } from '../../lib/duty'
+import { formatHoursClock, formatMinutesClock, placeLabel } from '../../lib/format'
 import type { DailyLog, DutyStatus, LogHeaderDetails } from '../../types/api'
 import {
   GRID,
@@ -14,11 +16,11 @@ import {
   STATUS_ORDER,
   bracketPath,
   buildDutyPath,
-  formatHours,
   restartState,
   layoutRemarks,
+  leaderPath,
   minutesByStatus,
-  roundedHoursByStatus,
+  roundedMinutesByStatus,
   splitDate,
   statusRowTop,
   statusToRowY,
@@ -33,6 +35,11 @@ export interface LogSheetProps {
   /** React 19 ref-as-prop: the root <svg>, used for SVG/PNG export. */
   ref?: Ref<SVGSVGElement>
   className?: string
+  /**
+   * Screen only: wash each grid row in its duty-status colour so the sheet reads with the
+   * rest of the app. Marked `data-screen-only`, so print and SVG/PNG exports stay ink-on-paper.
+   */
+  tint?: boolean
 }
 
 // ---------- Visual tokens (inline so exports are self-contained) ----------
@@ -45,8 +52,8 @@ const INK = '#1b3a8c'
 
 const FORM_FONT = "'Helvetica Neue', Helvetica, Arial, sans-serif"
 const GOV_FONT = "'Times New Roman', Times, Georgia, serif"
-const INK_FONT = "'JetBrains Mono', 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace"
-const SIGN_FONT = "'Caveat', 'Segoe Script', 'Bradley Hand', 'Snell Roundhand', 'Brush Script MT', cursive"
+// Same family as the app's mono type; exporters.ts embeds it so downloads render identically.
+export const INK_FONT = "'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace"
 
 const REMARK_FONT_SIZE = 10.5
 const REMARK_ANGLE = 45 // clockwise: labels descend to the right, as on FMCSA p.18-19
@@ -161,15 +168,16 @@ function Ruler({ top, bottom }: { top: number; bottom: number }) {
 
 // ---------- The sheet ----------
 
-export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: LogSheetProps) {
+export function LogSheet({ log, header, dayCount, tripLabel, ref, className, tint = false }: LogSheetProps) {
   const { month, day, year } = splitDate(log.date)
-  const minutes = minutesByStatus(log.segments)
-  const rowHours = roundedHoursByStatus(minutes)
-  const grandTotal = STATUS_ORDER.reduce((a, s) => a + rowHours[s], 0)
-  const onDutyToday = rowHours.D + rowHours.ON
+  // Row totals in whole minutes straight from the drawn segments, so what is printed is
+  // exactly what is drawn and the rows always add up to 24:00.
+  const rowMinutes = roundedMinutesByStatus(minutesByStatus(log.segments))
+  const grandTotal = STATUS_ORDER.reduce((a, s) => a + rowMinutes[s], 0)
+  const onDutyToday = rowMinutes.D + rowMinutes.ON
   const dutyPath = buildDutyPath(log.segments)
   const remarks = layoutRemarks(log.remarks, { fontSize: REMARK_FONT_SIZE, angle: REMARK_ANGLE })
-  const restart = restartState(log.remarks)
+  const restart = restartState(log.remarks, log.cycle_hours_used)
   const miles = Math.round(log.total_miles).toLocaleString('en-US')
   const vehicles = [header.truck_number, header.trailer_number].map((v) => v.trim()).filter(Boolean).join(', ')
   const shipping = splitShippingDoc(header.shipping_doc)
@@ -242,29 +250,22 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
         />
 
         {/* From / To */}
-        <InlineField x1={40} x2={520} y={146} label="From:" value={log.from_location} />
-        <InlineField x1={560} x2={GRID.totalsRight} y={146} label="To:" value={log.to_location} />
+        <InlineField x1={40} x2={520} y={146} label="From:" value={placeLabel(log.from_location)} />
+        <InlineField x1={560} x2={GRID.totalsRight} y={146} label="To:" value={placeLabel(log.to_location)} />
 
         {/* Carrier and signature */}
         <text x={560} y={170} fontFamily={FORM_FONT} fontSize={7.5} fill={LINE}>
           I certify that these entries are true and correct
         </text>
         <Field x1={40} x2={520} y={196} label="(NAME OF CARRIER OR CARRIERS)" value={header.carrier_name} size={16} />
-        <Field
-          x1={560}
-          x2={GRID.totalsRight}
-          y={196}
-          label="(DRIVER'S SIGNATURE IN FULL)"
-          value={header.driver_name}
-          size={26}
-          font={SIGN_FONT}
-          maxChars={34}
-        />
+        {/* Left blank for a wet signature: the app never signs on the driver's behalf. */}
+        <Field x1={560} x2={830} y={196} label="(DRIVER'S SIGNATURE IN FULL)" />
+        <Field x1={846} x2={GRID.totalsRight} y={196} label="(DRIVER NAME, PRINTED)" value={header.driver_name} size={14} />
 
         {/* Addresses and co-driver */}
         <Field x1={40} x2={276} y={240} label="(MAIN OFFICE ADDRESS)" value={header.main_office} size={12.5} />
         <Field x1={292} x2={520} y={240} label="(HOME TERMINAL ADDRESS)" value={header.home_terminal} size={12.5} />
-        <Field x1={560} x2={GRID.totalsRight} y={240} label="(NAME OF CO-DRIVER)" value={header.co_driver.trim() || 'N/A'} size={14} />
+        <Field x1={560} x2={GRID.totalsRight} y={240} label="(NAME OF CO-DRIVER)" value={header.co_driver} size={14} />
       </g>
 
       {/* ---------- 24-hour grid ---------- */}
@@ -293,6 +294,22 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
           <tspan x={(GRID.totalsLeft + GRID.totalsRight) / 2 + 6} y={GRID.barTop + 19}>Hours</tspan>
         </text>
 
+        {tint ? (
+          <g data-screen-only>
+            {STATUS_ORDER.map((status) => (
+              <rect
+                key={status}
+                x={GRID.left}
+                y={statusRowTop(status)}
+                width={GRID.right - GRID.left}
+                height={GRID.rowHeight}
+                fill={DUTY_HEX[status]}
+                opacity={0.07}
+              />
+            ))}
+          </g>
+        ) : null}
+
         {/* Rows */}
         {STATUS_ORDER.map((status) => {
           const top = statusRowTop(status)
@@ -308,7 +325,7 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
               {/* Row total, written on its own rule like the blank form */}
               <line x1={GRID.totalsLeft} x2={GRID.totalsRight} y1={top + GRID.rowHeight - 5} y2={top + GRID.rowHeight - 5} stroke={LINE} strokeWidth={0.9} />
               <text x={GRID.totalsRight - 2} y={top + GRID.rowHeight - 10} textAnchor="end" fontFamily={INK_FONT} fontSize={15} fontWeight={600} fill={INK}>
-                {formatHours(rowHours[status])}
+                {formatMinutesClock(rowMinutes[status])}
               </text>
             </g>
           )
@@ -346,7 +363,7 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
 
         {/* Grand total, double underlined */}
         <text x={GRID.totalsRight - 2} y={REMARKS.rulerBottom - 3} textAnchor="end" fontFamily={INK_FONT} fontSize={16} fontWeight={700} fill={INK}>
-          {`=${formatHours(grandTotal)}`}
+          {`=${formatMinutesClock(grandTotal)}`}
         </text>
         <line x1={GRID.totalsLeft} x2={GRID.totalsRight} y1={REMARKS.rulerBottom + 2} y2={REMARKS.rulerBottom + 2} stroke={LINE} strokeWidth={0.9} />
         <line x1={GRID.totalsLeft} x2={GRID.totalsRight} y1={REMARKS.rulerBottom + 5} y2={REMARKS.rulerBottom + 5} stroke={LINE} strokeWidth={0.9} />
@@ -354,38 +371,49 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
         {/* Blank-form style frame for the remarks area */}
         <path d={`M${GRID.left - 10} ${REMARKS.rulerBottom + 6} V${REMARKS.bottom + 6}`} stroke={LINE} strokeWidth={2} fill="none" />
 
-        {remarks.map((rm, i) => (
-          <g key={`${rm.remark.start_minute}-${i}`}>
+        {/* Brackets and leaders first, then every label on top with a paper halo, so no
+            line drawn later can cross an earlier label. */}
+        {log.remarks.map((rm, i) => (
+          <path
+            key={`b${rm.start_minute}-${i}`}
+            d={bracketPath(rm.start_minute, rm.end_minute)}
+            fill="none"
+            stroke={INK}
+            strokeWidth={1.8}
+            strokeLinejoin="round"
+          />
+        ))}
+        {remarks.map((rm, i) =>
+          rm.displaced ? (
             <path
-              d={bracketPath(rm.remark.start_minute, rm.remark.end_minute)}
+              key={`l${i}`}
+              d={leaderPath(rm)}
               fill="none"
               stroke={INK}
-              strokeWidth={1.8}
-              strokeLinejoin="round"
+              strokeWidth={0.7}
+              strokeDasharray="2 2"
+              opacity={0.7}
             />
-            {rm.displaced ? (
-              <path
-                d={`M${rm.startX} ${REMARKS.bracketTop + REMARKS.bracketDepth} L${rm.anchorX - 3} ${rm.anchorY - 6}`}
-                fill="none"
-                stroke={INK}
-                strokeWidth={0.7}
-                strokeDasharray="2 2"
-                opacity={0.7}
-              />
-            ) : null}
-            <text
-              x={rm.anchorX}
-              y={rm.anchorY}
-              transform={`rotate(${REMARK_ANGLE} ${rm.anchorX} ${rm.anchorY})`}
-              fontFamily={INK_FONT}
-              fontSize={rm.fontSize}
-              fontWeight={500}
-              fill={INK}
-            >
-              <title>{`${rm.remark.location} — ${rm.remark.note}`}</title>
-              {rm.text}
-            </text>
-          </g>
+          ) : null,
+        )}
+        {remarks.map((rm, i) => (
+          <text
+            key={`t${i}`}
+            x={rm.anchorX}
+            y={rm.anchorY}
+            transform={`rotate(${REMARK_ANGLE} ${rm.anchorX} ${rm.anchorY})`}
+            fontFamily={INK_FONT}
+            fontSize={rm.fontSize}
+            fontWeight={500}
+            fill={INK}
+            stroke={PAPER}
+            strokeWidth={3}
+            strokeLinejoin="round"
+            paintOrder="stroke"
+          >
+            <title>{`${rm.group.location} — ${rm.group.note}`}</title>
+            {rm.text}
+          </text>
         ))}
       </g>
 
@@ -413,7 +441,7 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
           <tspan x={196} y={766}>On duty hours today,</tspan>
           <tspan x={196} y={778}>Total lines 3 &amp; 4</tspan>
         </text>
-        <RecapValue x={196} value={formatHours(onDutyToday)} />
+        <RecapValue x={196} value={formatMinutesClock(onDutyToday)} />
 
         <text fontSize={10.5} fontWeight={800}>
           <tspan x={378} y={766}>70 Hour /</tspan>
@@ -425,14 +453,14 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className }: L
           <tspan x={532} y={766}>Total hours on duty this</tspan>
           <tspan x={532} y={778}>cycle, including today</tspan>
         </text>
-        <RecapValue x={532} value={formatHours(log.cycle_hours_used)} />
+        <RecapValue x={532} value={formatHoursClock(log.cycle_hours_used)} />
 
         <text fontSize={9} fontWeight={600}>
           <tspan x={706} y={766} fontSize={11} fontWeight={800}>B.</tspan>
           <tspan x={722} y={766}>Total hours available</tspan>
           <tspan x={722} y={778}>tomorrow, 70 hr. minus A*</tspan>
         </text>
-        <RecapValue x={722} value={formatHours(log.cycle_hours_available)} />
+        <RecapValue x={722} value={formatHoursClock(log.cycle_hours_available)} />
 
         <text fontSize={8.5} fontWeight={600} fill={FAINT}>
           <tspan x={900} y={766}>*34 consecutive hours off</tspan>

@@ -37,10 +37,16 @@ RESET_OFF = 10 * 60  # 10 consecutive hours off resets the 11/14-h clocks (p.6-7
 CYCLE_LIMIT = 70 * 60  # 70 h on duty in 8 days; no driving at or above it (p.10-11)
 RESTART = 34 * 60  # 34 consecutive hours off resets the cycle to 0 (p.11)
 
-# Restart instead of opening a duty period when less than this much cycle time is left.
-CYCLE_RESTART_THRESHOLD = CYCLE_LIMIT - 60
+# When the rest of the trip does not fit in the cycle, take the 34-h restart once the next
+# duty period could drive less than this (or less than all the remaining driving).
+MIN_USEFUL_DRIVING = 60
+# A break or fuel stop is skipped in favour of ending the duty period when less driving
+# than this could follow it.
+MIN_DRIVE_AFTER_STOP = 15
 
 FUEL_INTERVAL_MILES = 1000.0  # fuel at least every 1,000 miles (assessment brief)
+# Fuel early, at a stop that is happening anyway, when fuel falls due within this many miles.
+FUEL_EARLY_MILES = 75.0
 PICKUP_MINUTES = 60  # brief: 1 h for pickup, logged ON (p.5: loading is on duty)
 DROPOFF_MINUTES = 60  # brief: 1 h for drop-off, logged ON
 PRE_TRIP_MINUTES = 30  # at the start of every duty period, when inspections are enabled

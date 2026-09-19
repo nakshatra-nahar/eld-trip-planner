@@ -5,12 +5,10 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict
-from typing import Generic, Hashable, TypeVar
-
-V = TypeVar("V")
+from collections.abc import Hashable
 
 
-class TTLCache(Generic[V]):
+class TTLCache[V]:
     def __init__(self, maxsize: int = 1024, ttl: float = 3600.0):
         self.maxsize = maxsize
         self.ttl = ttl

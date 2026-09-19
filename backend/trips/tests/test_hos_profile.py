@@ -53,7 +53,7 @@ def test_road_at_mile():
     assert p.road_at_mile(10) == "I 80"
     assert p.road_at_mile(29.9) == "I 80"
     assert p.road_at_mile(45) == ""
-    assert p.step_at_mile(15) == "I 80"
+    assert p.road_at_mile(15) == "I 80"
     assert LegProfile.straight((0, 0), (1, 1), 10, 10).road_at_mile(5) == ""
 
 

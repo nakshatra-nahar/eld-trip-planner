@@ -11,7 +11,7 @@ import { LocationCombobox } from './LocationCombobox'
 import { LogHeaderFields } from './LogHeaderFields'
 import { type LocationValue, type PlannerErrors, type PlannerValues, toLocationInput } from './types'
 import { UseMyLocationButton } from './UseMyLocationButton'
-import { validatePlanner } from './validation'
+import { FUEL_MINUTES, validatePlanner } from './validation'
 
 interface PlannerFormProps {
   values: PlannerValues
@@ -22,6 +22,7 @@ interface PlannerFormProps {
   header: LogHeaderDetails
   onHeaderChange: <K extends keyof LogHeaderDetails>(key: K, value: LogHeaderDetails[K]) => void
   onHeaderClear: () => void
+  onHeaderSample: () => void
   serverErrors?: PlannerErrors
 }
 
@@ -36,6 +37,7 @@ export function PlannerForm({
   header,
   onHeaderChange,
   onHeaderClear,
+  onHeaderSample,
   serverErrors,
 }: PlannerFormProps) {
   const [submitted, setSubmitted] = useState(false)
@@ -73,7 +75,7 @@ export function PlannerForm({
   return (
     <form noValidate onSubmit={handleSubmit} aria-label="Trip planner" className="flex flex-col">
       <div className="px-5 pt-5 sm:px-6">
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-600 uppercase">New trip</p>
+        <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-700 uppercase">New trip</p>
         <h1 className="mt-0.5 font-display text-[22px] leading-tight font-extrabold tracking-tight text-ink-900">
           Plan an HOS-compliant run
         </h1>
@@ -172,6 +174,7 @@ export function PlannerForm({
           title="Advanced"
           icon={<Settings2 className="size-4" aria-hidden />}
           summary={`${options.include_inspections ? 'Inspections' : 'No inspections'} · ${options.rest_status} rest · ${options.fuel_stop_minutes} min fuel`}
+          forceOpen={Boolean(shown.fuel)}
         >
           <div className="grid gap-3">
             <Toggle
@@ -193,11 +196,11 @@ export function PlannerForm({
               label="Fuel stop duration"
               type="number"
               inputMode="numeric"
-              min={5}
-              max={180}
+              min={FUEL_MINUTES.min}
+              max={FUEL_MINUTES.max}
               step={5}
               value={Number.isFinite(options.fuel_stop_minutes) ? options.fuel_stop_minutes : ''}
-              onChange={(e) => patch({ options: { ...options, fuel_stop_minutes: e.target.valueAsNumber } })}
+              onChange={(e) => patch({ options: { ...options, fuel_stop_minutes: Math.round(e.target.valueAsNumber) } })}
               error={shown.fuel}
               hint="On duty (not driving). A stop is planned at least every 1,000 miles."
               trailing={<span className="pr-3 text-sm text-ink-400">min</span>}
@@ -212,10 +215,17 @@ export function PlannerForm({
         >
           <LogHeaderFields value={header} onChange={onHeaderChange} />
           <div className="mt-3 flex items-center justify-between gap-3">
-            <p className="text-xs text-ink-500">Saved in this browser only.</p>
-            <Button size="sm" variant="ghost" onClick={onHeaderClear}>
-              Clear details
-            </Button>
+            <p className="text-xs text-ink-500">
+              Starts with the FMCSA guide&rsquo;s sample driver. Edit to match yours; saved in this browser only.
+            </p>
+            <div className="flex gap-1">
+              <Button size="sm" variant="ghost" onClick={onHeaderSample}>
+                Reset to sample
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onHeaderClear}>
+                Clear
+              </Button>
+            </div>
           </div>
         </Disclosure>
       </div>

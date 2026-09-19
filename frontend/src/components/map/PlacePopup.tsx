@@ -1,5 +1,5 @@
 import { DUTY_HEX, EVENT_KIND } from '../../lib/duty'
-import { formatClock, formatDay, formatDuration, formatMiles } from '../../lib/format'
+import { formatClock, formatDay, formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { MapPlace } from './mapModel'
 
 const ROLE_TITLE = { current: 'Start', pickup: 'Pickup', dropoff: 'Dropoff' } as const
@@ -16,7 +16,7 @@ export function PlacePopup({ place }: { place: MapPlace }) {
           {mile !== undefined && <span className="tabular"> · Mile {formatMiles(mile, { unit: false })}</span>}
         </p>
         <p className="mt-0.5 truncate font-display text-[15px] leading-snug font-bold">
-          {place.stops[0]?.location.name ?? place.title}
+          {place.stops[0] ? placeLabel(place.stops[0].location.name) : place.title}
         </p>
       </div>
       {place.stops.length > 0 ? (

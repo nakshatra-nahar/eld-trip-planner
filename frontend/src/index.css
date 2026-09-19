@@ -15,8 +15,9 @@
   --color-ink-800: #1a2540;
   --color-ink-700: #2a3754;
   --color-ink-600: #445170;
-  --color-ink-500: #637091;
-  --color-ink-400: #8e98b0;
+  /* 500 and 400 are text colours: both keep >= 4.5:1 on white and on the ink-50/100 panels. */
+  --color-ink-500: #5a6786;
+  --color-ink-400: #636f8e;
   --color-ink-300: #bcc3d2;
   --color-ink-200: #dde1ea;
   --color-ink-150: #e8ebf1;
@@ -38,6 +39,7 @@
   --color-duty-sb-soft: #eceafd;
   --color-duty-d: #059669;
   --color-duty-d-soft: #e3f6ee;
+  --color-duty-d-ink: #047857; /* driving green for text (5.5:1 on white) */
   --color-duty-on: #d97706;
   --color-duty-on-soft: #fdf1dc;
 
@@ -160,6 +162,10 @@
 }
 
 /* ---------- MapLibre chrome, restyled to match the app ---------- */
+/* Popups sit above stop markers (inline z-index 1-3) and the map overlays (z-index 4). */
+.maplibregl-popup {
+  z-index: 5;
+}
 .maplibregl-popup-content {
   padding: 0 !important;
   border-radius: 12px !important;

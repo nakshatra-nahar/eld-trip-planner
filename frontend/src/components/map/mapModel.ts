@@ -1,6 +1,7 @@
 // Pure helpers that turn a PlanResponse into things the map draws.
 import type { FeatureCollection, LineString } from 'geojson'
 import { EVENT_KIND } from '../../lib/duty'
+import { placeLabel } from '../../lib/format'
 import type { LngLat, PlanResponse, Stop } from '../../types/api'
 
 export type EndpointRole = 'current' | 'pickup' | 'dropoff'
@@ -68,7 +69,7 @@ export function buildPlaces(plan: PlanResponse): MapPlace[] {
       ['pickup', input.pickup_location],
       ['dropoff', input.dropoff_location],
     ] as const
-  ).map(([role, loc]) => ({ key: role, role, lngLat: [loc.lon, loc.lat], title: loc.label, stops: [] }))
+  ).map(([role, loc]) => ({ key: role, role, lngLat: [loc.lon, loc.lat], title: placeLabel(loc.label), stops: [] }))
 
   // Current == pickup: keep a single pin (the pickup) at that spot.
   const [current, pickup] = endpoints
@@ -78,7 +79,7 @@ export function buildPlaces(plan: PlanResponse): MapPlace[] {
     const at: LngLat = [stop.location.lon, stop.location.lat]
     const home = places.find((p) => approxMiles(p.lngLat, at) < GROUP_RADIUS_MI)
     if (home) home.stops.push(stop)
-    else places.push({ key: `s-${stop.id}`, lngLat: at, title: stop.location.name, stops: [stop] })
+    else places.push({ key: `s-${stop.id}`, lngLat: at, title: placeLabel(stop.location.name), stops: [stop] })
   }
   for (const p of places) p.stops.sort(byPriority)
   // Endpoints render last so they sit above stop markers.

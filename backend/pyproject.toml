@@ -17,3 +17,20 @@ dev = [
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# DTZ is deliberately not selected: plans use naive local home-terminal time
+# (no time-zone conversion; see the assumptions in trips/hos/logs.py).
+
+[tool.ruff.lint.per-file-ignores]
+# Tests keep wide fixture tables on one line and zip same-length literals.
+"**/tests/**" = ["E501", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "trips"]

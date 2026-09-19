@@ -64,25 +64,40 @@ def expected_route_miles(legs):
     return sum(leg.total_miles for leg in legs if leg.total_miles >= R.MIN_LEG_MILES)
 
 
-def assert_no_premature_stops(events, cycle_hours):
-    """Breaks, rests and restarts are only taken when a limit actually binds."""
+def assert_no_premature_stops(events, cycle_hours, options):
+    """Breaks, rests and restarts are only taken when a limit (nearly) binds."""
     window_start = None
     drive_in_period = drive_since_break = nondriving_run = 0
     cycle = cycle_hours * 60
+    # Cycle minutes below which a restart is never needed: the next period can still do its
+    # unavoidable on-duty work (pre-trip, pickup, a due fuel stop, post-trip) and drive 1 h.
+    restart_floor = R.CYCLE_LIMIT - (
+        R.MIN_USEFUL_DRIVING + R.PRE_TRIP_MINUTES + R.POST_TRIP_MINUTES + R.PICKUP_MINUTES + options.fuel_stop_minutes
+    )
+    early = R.MIN_DRIVE_AFTER_STOP + max(R.BREAK_MINUTES, options.fuel_stop_minutes)
     for i, ev in enumerate(events):
         if ev.kind == K.BREAK:
             assert drive_since_break == R.BREAK_AFTER_DRIVING, (i, ev)
         if ev.kind in (K.REST, K.RESTART) and window_start is not None:
-            # Measure at the post-trip inspection if one precedes the rest.
-            at = events[i - 1].start if events[i - 1].kind == K.POST_TRIP else ev.start
+            # Measure where the period's driving stopped: before its post-trip and any fuel stop.
+            j = i
+            while j > 0 and events[j - 1].kind in (K.POST_TRIP, K.FUEL):
+                j -= 1
+            at = events[j].start
             elapsed = at - window_start
             assert (
-                drive_in_period >= R.MAX_DRIVING
-                or elapsed >= R.DUTY_WINDOW - R.BREAK_MINUTES
-                or cycle > R.CYCLE_RESTART_THRESHOLD
+                drive_in_period >= R.MAX_DRIVING - R.MIN_DRIVE_AFTER_STOP
+                or elapsed >= R.DUTY_WINDOW - early
+                or cycle > restart_floor
             ), (i, ev, drive_in_period, elapsed, cycle)
         if ev.kind == K.RESTART:
-            assert window_start is not None or cycle > R.CYCLE_RESTART_THRESHOLD
+            assert cycle > restart_floor, (i, ev, cycle)
+            # The recap never passes 70 h before a restart (only the final drop-off and
+            # post-trip may, which is legal on-duty not-driving time).
+            assert cycle <= R.CYCLE_LIMIT + 1e-6, (i, ev, cycle)
+            # A 10-h rest is never followed by a restart without any driving in between.
+            prev_rest = next((e for e in reversed(events[:i]) if e.kind in (K.REST, K.RESTART, K.DRIVE)), None)
+            assert prev_rest is None or prev_rest.kind == K.DRIVE, (i, ev)
         # advance clocks
         if ev.status in R.ON_DUTY_STATUSES:
             if window_start is None:
@@ -100,6 +115,13 @@ def assert_no_premature_stops(events, cycle_hours):
             window_start, drive_in_period, drive_since_break = None, 0, 0
             if ev.kind == K.RESTART:
                 cycle = 0
+    # Past 70 h only after the last driving minute.
+    last_drive = max((i for i, ev in enumerate(events) if ev.kind == K.DRIVE), default=-1)
+    cycle = cycle_hours * 60
+    for i, ev in enumerate(events):
+        cycle = 0 if ev.kind == K.RESTART else cycle + (ev.duration if ev.is_on_duty else 0)
+        if i < last_drive:
+            assert cycle <= R.CYCLE_LIMIT + 1e-6, (i, ev, cycle)
 
 
 def check_trip(legs, cycle, start, options):
@@ -107,18 +129,19 @@ def check_trip(legs, cycle, start, options):
 
     # HOS rules, contiguity, pickup/drop-off exactly 60 min ON.
     assert audit_events(events, cycle) == []
-    assert_no_premature_stops(events, cycle)
+    assert_no_premature_stops(events, cycle, options)
 
     # Driven miles equal the (drivable) route miles.
     driven = sum(ev.miles for ev in events if ev.kind == K.DRIVE)
     assert abs(driven - expected_route_miles(legs)) < 1e-6
     assert all(ev.miles >= -1e-9 for ev in events)
 
-    # Fuel stops are only taken when (nearly) 1,000 mi have been driven since the last one.
+    # Fuel stops are only taken when (nearly) 1,000 mi have been driven since the last one;
+    # an early stop combines fueling with a stop that was happening anyway.
     since = 0.0
     for ev in events:
         if ev.kind == K.FUEL:
-            assert since >= R.FUEL_INTERVAL_MILES - 5, since
+            assert since >= R.FUEL_INTERVAL_MILES - R.FUEL_EARLY_MILES - 5, since
             since = 0.0
         elif ev.kind == K.DRIVE:
             since += ev.miles

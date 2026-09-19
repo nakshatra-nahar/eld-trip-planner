@@ -31,7 +31,9 @@ MAX_RING = 12  # cells; beyond ~800 mi we give up (query is far outside US/CA)
 
 # Highway refs that read well in a remark: "I 80", "US 30", "IL 59", "TX 121", "ON 401",
 # "Hwy 1", "CR 12", "Trans-Canada Highway" is a name, not a ref.
-_HIGHWAY_REF = re.compile(r"^(I|US|SR|CR|Hwy|HWY|Highway|Route|RT|[A-Z]{2})[ -]?\d+[A-Z]?(?:\s?(?:Bus|Alt|Byp|Spur|Loop))?$")
+_HIGHWAY_REF = re.compile(
+    r"^(I|US|SR|CR|Hwy|HWY|Highway|Route|RT|[A-Z]{2})[ -]?\d+[A-Z]?(?:\s?(?:Bus|Alt|Byp|Spur|Loop))?$"
+)
 
 
 @dataclass(frozen=True, slots=True)

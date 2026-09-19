@@ -34,3 +34,10 @@ class UpstreamUnavailable(ServiceError):
 
     code = "upstream_unavailable"
     status = 502
+
+
+class UnsupportedRegion(ServiceError):
+    """A location lies outside the United States and Canada."""
+
+    code = "unsupported_region"
+    status = 422

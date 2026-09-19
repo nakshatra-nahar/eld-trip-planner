@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from django.conf import settings
+from django.core.exceptions import RequestDataTooBig
 from django.http import JsonResponse
 from rest_framework import exceptions, status
 from rest_framework.request import Request
@@ -74,6 +75,11 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
     if isinstance(exc, exceptions.ParseError):
         return Response(error_body("Request body is not valid JSON.", "validation_error"), status=exc.status_code)
 
+    if isinstance(exc, RequestDataTooBig):
+        return Response(error_body("Request body is too large.", "payload_too_large"), status=413)
+    if isinstance(exc, RecursionError):  # JSON nested too deeply to decode
+        return Response(error_body("Request body is not valid JSON.", "validation_error"), status=400)
+
     response = exception_handler(exc, context)
     if response is not None:  # other APIExceptions (405, 415, 404, throttled, ...)
         detail = getattr(exc, "detail", None)
@@ -102,12 +108,17 @@ class PlanTripView(APIView):
 
 
 class GeocodeView(APIView):
-    """GET /api/geocode/?q=...  -> GeocodeResponse (US/CA only, cached)."""
+    """GET /api/geocode/?q=...  -> GeocodeResponse (US/CA only, cached, rate-limited per IP)."""
+
+    throttle_scope = "geocode"
 
     def get(self, request: Request) -> Response:
         serializer = GeocodeQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        results = geocoding.geocode(serializer.validated_data["q"], limit=serializer.validated_data["limit"])
+        # Autocomplete: Photon only (Nominatim's usage policy forbids autocomplete).
+        results = geocoding.geocode(
+            serializer.validated_data["q"], limit=serializer.validated_data["limit"], allow_fallback=False
+        )
         response = Response({"results": results})
         response["Cache-Control"] = "public, max-age=3600"
         return response
@@ -119,7 +130,8 @@ class ReverseGeocodeView(APIView):
     def get(self, request: Request) -> Response:
         serializer = ReverseQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        return Response({"result": geocoding.reverse(serializer.validated_data["lat"], serializer.validated_data["lon"])})
+        data = serializer.validated_data
+        return Response({"result": geocoding.reverse(data["lat"], data["lon"])})
 
 
 class HealthView(APIView):

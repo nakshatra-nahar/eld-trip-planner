@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
 import requests
 
-USER_AGENT = "eld-trip-planner/1.0 (+https://github.com/; Spotter AI assessment)"
+# Nominatim's usage policy asks for an identifying User-Agent with a contact: set
+# UPSTREAM_CONTACT to the deployment's repository URL or a contact address.
+_CONTACT = os.environ.get("UPSTREAM_CONTACT", "").strip()
+USER_AGENT = f"eld-trip-planner/1.0 ({'+' + _CONTACT + '; ' if _CONTACT else ''}Spotter AI assessment)"
 
 _local = threading.local()
 

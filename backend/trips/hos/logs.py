@@ -46,6 +46,20 @@ _REMARK_NOTES = {
 }
 
 
+def _road_part(name: str, city: str) -> str:
+    """The road in a namer label: "I 44 near Joplin, MO" with city "Joplin, MO" -> "I 44"."""
+    suffix = f" near {city}"
+    return name[: -len(suffix)] if name != city and name.endswith(suffix) else ""
+
+
+def _remark_place(ref: dict) -> dict:
+    """``LogRemark`` location fields from a ``PlaceRef``."""
+    out = {"location": ref["name"], "city": ref["city"]}
+    if "road" in ref:
+        out["road"] = ref["road"]
+    return out
+
+
 def _label(ev: DutyEvent) -> str:
     return _REST_LABELS[ev.status] if ev.kind == R.Kind.REST else _LABELS[ev.kind]
 
@@ -140,12 +154,15 @@ class _PlanBuilder:
         return leg.road_at_mile(leg_mile) or None
 
     def _place_ref(self, coord: LonLat, leg_index: int, leg_mile: float) -> dict:
+        """``PlaceRef``: the display ``name`` plus its parts, ``city`` and (on a highway) ``road``."""
         lon, lat = coord
-        return {
-            "lat": round(lat, 5),
-            "lon": round(lon, 5),
-            "name": self._name(coord, self._road(leg_index, leg_mile)),
-        }
+        name = self._name(coord, self._road(leg_index, leg_mile))
+        city = self._name(coord, None)
+        ref = {"lat": round(lat, 5), "lon": round(lon, 5), "name": name, "city": city}
+        road = _road_part(name, city)
+        if road:
+            ref["road"] = road
+        return ref
 
     def _drive_state(self, ev: DutyEvent, minute: int) -> tuple[float, LonLat]:
         """(trip mile, coord) at trip minute ``minute`` inside driving event ``ev``."""
@@ -218,7 +235,7 @@ class _PlanBuilder:
 
     def stops(self, timeline: list[dict]) -> list[dict]:
         out = []
-        for ev, item in zip(self.events, timeline):
+        for ev, item in zip(self.events, timeline, strict=True):
             if ev.kind == R.Kind.DRIVE:
                 continue
             out.append({
@@ -239,7 +256,7 @@ class _PlanBuilder:
         by_day: list[list[_Piece]] = [[] for _ in range(self.num_days)]
         for p in self.pieces:
             by_day[p.day].append(p)
-        names = {id(ev): item["start_location"]["name"] for ev, item in zip(self.events, timeline)}
+        names = {id(ev): item["start_location"] for ev, item in zip(self.events, timeline, strict=True)}
 
         raw_miles = [sum(self._piece_miles(p) for p in day) for day in by_day]
         tenths = _largest_remainder([m * 10 for m in raw_miles], round(total_miles * 10))
@@ -251,7 +268,8 @@ class _PlanBuilder:
             for p in pieces:
                 if p.status in R.ON_DUTY_STATUSES:
                     cycle += p.end - p.start
-                if p.event is not None and p.event.kind == R.Kind.RESTART and self._trip_minute(p, p.end) == p.event.end:
+                ev = p.event
+                if ev is not None and ev.kind == R.Kind.RESTART and self._trip_minute(p, p.end) == ev.end:
                     cycle = 0.0
             logs.append(self._sheet(day, pieces, tenths[day] / 10, cycle, names))
         return logs
@@ -275,11 +293,22 @@ class _PlanBuilder:
                 segments.append({"status": p.status, "start_minute": p.start, "end_minute": p.end})
 
         hundredths = _largest_remainder([minutes[s] * 100 / 60 for s in R.STATUSES], 2400)
-        totals = {s: h / 100 for s, h in zip(R.STATUSES, hundredths)}
+        totals = {s: h / 100 for s, h in zip(R.STATUSES, hundredths, strict=True)}
 
         remarks = []
+        trip_start = self.start_offset - day * MINUTES_PER_DAY  # sheet minute of the trip start
         for p in pieces:
             ev = p.event
+            if ev is not None and ev is self.events[0] and ev.kind == R.Kind.DRIVE and p.start == trip_start:
+                # A change of duty status needs a location (FMCSA p.17); with inspections off
+                # the trip opens OFF -> D with no pre-trip remark to carry it.
+                remarks.append({
+                    "start_minute": p.start,
+                    "end_minute": min(p.start + 1, p.end),
+                    "status": ev.status,
+                    **_remark_place(names[id(ev)]),
+                    "note": "Start of trip / on duty",
+                })
             if ev is None or ev.kind == R.Kind.DRIVE:
                 continue
             continued = self._trip_minute(p, p.start) > ev.start
@@ -288,7 +317,7 @@ class _PlanBuilder:
                 "start_minute": p.start,
                 "end_minute": p.end,
                 "status": ev.status,
-                "location": names[id(ev)],
+                **_remark_place(names[id(ev)]),
                 "note": note,
             })
 
@@ -353,7 +382,8 @@ class _PlanBuilder:
             "Pickup and drop-off take 1 hour each, logged on duty (not driving).",
             f"10-hour rests are logged as {rest}; 34-hour restarts are logged off duty.",
             "Current Cycle Used hours do not roll off during the trip (conservative: no per-day history is given).",
-            "A 34-hour restart is taken when the 70-hour cycle is exhausted.",
+            "A 34-hour restart is taken when the rest of the trip's driving no longer fits in the 70-hour "
+            "cycle; on-duty work after the last drive (drop-off, post-trip) may run past 70 h.",
             "All times are the home-terminal time of the start location; no time-zone conversion.",
             "A single driver: no split sleeper berth and no team driving.",
             f"Truck speed is capped at {R.TRUCK_SPEED_CAP_MPH:g} mph over each route segment.",
@@ -377,7 +407,24 @@ class _PlanBuilder:
                 )
             else:
                 out.append(f"34-hour restart required: cycle hours exhausted on day {day}.")
+        final = self._final_cycle()
+        if final > R.CYCLE_LIMIT + 1e-6:
+            after = (
+                "drop-off and post-trip inspection that follow are"
+                if self.options.include_inspections
+                else "drop-off that follows is"
+            )
+            out.append(
+                f"The cycle ends at {_hours(final):.2f} h: driving finishes within 70 h, and the {after} "
+                "on duty (not driving), which is allowed after 70 h (FMCSA p.10)."
+            )
         return out
+
+    def _final_cycle(self) -> float:
+        cycle = self.initial_cycle
+        for ev in self.events:
+            cycle = 0.0 if ev.kind == R.Kind.RESTART else cycle + (ev.duration if ev.is_on_duty else 0)
+        return cycle
 
     def build(self) -> dict:
         timeline = self.timeline()

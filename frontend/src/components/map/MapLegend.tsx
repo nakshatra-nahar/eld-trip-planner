@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { DUTY_HEX, EVENT_KIND } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import type { EventKind, PlanResponse } from '../../types/api'
@@ -7,8 +7,7 @@ import type { EventKind, PlanResponse } from '../../types/api'
 const ORDER: EventKind[] = ['fuel', 'break', 'rest', 'restart', 'pre_trip', 'post_trip']
 
 /** Map key: the two route legs and every stop kind present in this plan. */
-export function MapLegend({ plan }: { plan: PlanResponse }) {
-  const [open, setOpen] = useState(() => window.matchMedia('(min-width: 640px)').matches)
+export function MapLegend({ plan, open, onToggle }: { plan: PlanResponse; open: boolean; onToggle: () => void }) {
   const kinds = useMemo(() => {
     const present = new Map<EventKind, (typeof plan.stops)[number]['status']>()
     for (const s of plan.stops) if (!present.has(s.kind)) present.set(s.kind, s.status)
@@ -17,11 +16,11 @@ export function MapLegend({ plan }: { plan: PlanResponse }) {
   const hasLeg0 = plan.route.legs[0]?.distance_miles > 0.1
 
   return (
-    <div className="absolute top-14 left-2.5 max-w-[calc(100%-7rem)] sm:top-auto sm:bottom-2.5 rounded-xl bg-white/95 text-ink-800 shadow-card ring-1 ring-ink-900/10 backdrop-blur">
+    <div className="absolute top-14 left-2.5 z-[4] max-w-[calc(100%-7rem)] sm:top-auto sm:bottom-2.5 rounded-xl bg-white/95 text-ink-800 shadow-card ring-1 ring-ink-900/10 backdrop-blur">
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
         className="flex h-9 w-full items-center gap-2 px-3 text-[11px] font-semibold tracking-[0.12em] text-ink-500 uppercase"
       >
         Legend

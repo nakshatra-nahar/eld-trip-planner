@@ -19,7 +19,11 @@ FIXTURES = Path(__file__).parent / "trips" / "tests" / "fixtures"
 
 def load_fixture(name: str) -> dict[str, Any]:
     path = FIXTURES / name
-    raw = gzip.open(path).read() if name.endswith(".gz") else path.read_bytes()
+    if name.endswith(".gz"):
+        with gzip.open(path) as fh:
+            raw = fh.read()
+    else:
+        raw = path.read_bytes()
     return json.loads(raw)
 
 

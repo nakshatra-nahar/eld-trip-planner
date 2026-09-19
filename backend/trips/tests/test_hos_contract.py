@@ -18,22 +18,24 @@ TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def parse_api_ts() -> tuple[dict[str, dict[str, str]], dict[str, set[str]]]:
-    """Return ({interface: {field: ts_type}}, {union alias: {literal values}})."""
+def parse_api_ts() -> tuple[dict[str, dict[str, str]], dict[str, set[str]], dict[str, dict[str, str]]]:
+    """Return ({interface: {field: ts_type}}, {union alias: {literal values}},
+    {interface: {optional field: ts_type}})."""
     text = API_TS.read_text()
-    interfaces = {}
+    interfaces, optionals = {}, {}
     for name, body in re.findall(r"export interface (\w+) \{(.*?)\n\}", text, re.DOTALL):
-        fields = {}
+        fields, optional = {}, {}
         for line in body.splitlines():
             line = line.split("//")[0].strip()
             m = re.match(r"(\w+)(\??):\s*(.+)$", line)
-            if m and not m.group(2):  # required fields only
-                fields[m.group(1)] = m.group(3).strip()
+            if m:
+                (optional if m.group(2) else fields)[m.group(1)] = m.group(3).strip()
         interfaces[name] = fields
+        optionals[name] = optional
     unions = {}
     for name, body in re.findall(r"export type (\w+) =((?:\s*\|?\s*'[^']*')+)", text):
         unions[name] = set(re.findall(r"'([^']*)'", body))
-    return interfaces, unions
+    return interfaces, unions, optionals
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +46,7 @@ def contract():
 
 
 def check_value(value, ts_type, contract, path):
-    interfaces, unions = contract
+    interfaces, unions, _ = contract
     ts_type = ts_type.strip()
     if ts_type.endswith("[]"):
         assert isinstance(value, list), path
@@ -72,11 +74,12 @@ def check_value(value, ts_type, contract, path):
 
 def check_interface(obj, name, contract, path=None):
     path = path or name
-    fields = contract[0][name]
+    fields, optional = contract[0][name], contract[2][name]
     assert isinstance(obj, dict), path
-    assert set(obj) == set(fields), f"{path}: keys {sorted(obj)} != {sorted(fields)}"
-    for key, ts_type in fields.items():
-        check_value(obj[key], ts_type, contract, f"{path}.{key}")
+    assert set(fields) <= set(obj) <= set(fields) | set(optional), f"{path}: keys {sorted(obj)} vs {sorted(fields)}"
+    for key, ts_type in {**fields, **optional}.items():
+        if key in obj:
+            check_value(obj[key], ts_type, contract, f"{path}.{key}")
 
 
 def namer(lat, lon, road=None):
@@ -167,3 +170,15 @@ def test_engine_is_pure_python():
     hos_dir = Path(__file__).resolve().parents[1] / "hos"
     for source in hos_dir.glob("*.py"):
         assert not forbidden.search(source.read_text()), source.name
+
+
+def test_place_refs_carry_city_and_road(plan):
+    """Every PlaceRef splits its name into city (+ road on a highway), consistently."""
+    for ev in plan["timeline"]:
+        for ref in (ev["start_location"], ev["end_location"]):
+            assert ref["city"].startswith("Town ")
+            expected = f"{ref['road']} near {ref['city']}" if "road" in ref else ref["city"]
+            assert ref["name"] == expected
+    for log in plan["daily_logs"]:
+        for r in log["remarks"]:
+            assert r["location"].endswith(r["city"])

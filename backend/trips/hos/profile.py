@@ -112,9 +112,6 @@ class LegProfile:
         i = max(i, 0)
         return self.steps[i].road or ""
 
-    # Alias used by the SPEC's prose ("step_at_mile returns the road name/ref").
-    step_at_mile = road_at_mile
-
     @classmethod
     def straight(
         cls,

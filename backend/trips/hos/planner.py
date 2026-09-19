@@ -9,7 +9,7 @@ so miles are exact at every leg end and no rounding drift accumulates.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import floor, inf
+from math import ceil, floor, inf
 
 from . import rules as R
 from .profile import LegProfile, LonLat
@@ -151,6 +151,11 @@ class _Planner:
         later = sum(d.minutes for d in self.drives[self.pos_leg + 1 :])
         return max(0, current.minutes - self.progress) + later
 
+    def _miles_remaining(self) -> float:
+        current = self.drives[self.pos_leg]
+        later = sum(d.driven_miles for d in self.drives[self.pos_leg + 1 :])
+        return max(0.0, current.driven_miles - current.leg_mile(self.progress)) + later
+
     # ----- event recording ----------------------------------------------------
 
     def _stationary(self, kind: str, status: str, minutes: int) -> None:
@@ -189,18 +194,26 @@ class _Planner:
     # ----- duty-period transitions -------------------------------------------
 
     def _ensure_duty_period(self) -> None:
-        """Open a duty period (restarting first if the cycle is nearly spent)."""
+        """Open a duty period (restarting first if the cycle cannot support it)."""
         if self.window_start is not None:
             return
-        if self.cycle > R.CYCLE_RESTART_THRESHOLD and self._driving_remaining() > 0:
+        if self._needs_restart():
             self._stationary(R.Kind.RESTART, R.OFF, R.RESTART)
             self._reset_after_off(restart=True)
         self.window_start = self.t
         if self.opts.include_inspections:
             self._stationary(R.Kind.PRE_TRIP, R.ON, R.PRE_TRIP_MINUTES)
 
-    def _end_duty_period(self, restart: bool) -> None:
-        """Post-trip inspection, then a 10-h rest or a 34-h restart."""
+    def _end_duty_period(self, restart: bool | None = None) -> None:
+        """Post-trip inspection, then a 10-h rest or a 34-h restart (chosen here when None).
+
+        Before a 10-h rest, a fuel stop that is nearly due is taken at the same stop.
+        """
+        if restart is None:
+            restart = self._needs_restart()
+            if not restart and self._fuel_soon() and self._cycle_allows(self.opts.fuel_stop_minutes):
+                self._fuel()
+                restart = self._needs_restart()
         if self.opts.include_inspections and self.window_start is not None:
             self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES)
         if restart:
@@ -216,9 +229,76 @@ class _Planner:
         if restart:
             self.cycle = 0.0
 
+    # ----- 70-hour cycle planning -----------------------------------------------
+
+    def _post_trip_reserve(self) -> int:
+        """On-duty minutes a period still owes before it can end (its post-trip inspection)."""
+        return R.POST_TRIP_MINUTES if self.opts.include_inspections and self.window_start is not None else 0
+
+    def _cycle_allows(self, minutes: int) -> bool:
+        """Whether ``minutes`` more on duty leave room for the period's post-trip within 70 h."""
+        return self.cycle + minutes + self._post_trip_reserve() <= R.CYCLE_LIMIT + _MINUTE_EPS
+
+    def _work_needed(self, drive: int, opening: bool) -> float:
+        """Upper-bound estimate of the on-duty minutes left before the last driving minute.
+
+        Only driving must end within 70 h; the drop-off and final post-trip that follow it
+        are on duty (not driving), which is allowed after 70 h (FMCSA p.10).
+        ``opening``: whether the current duty period is about to end (a new one opens next).
+        """
+        insp = self.opts.include_inspections
+        if opening:
+            periods = ceil(drive / R.MAX_DRIVING)
+            pre_trips, post_trips = periods, periods - 1
+        else:
+            now = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - (self.t - (self.window_start or self.t)))
+            later = ceil(max(0, drive - max(now, 0)) / R.MAX_DRIVING)
+            pre_trips = post_trips = later
+        fuel_stops = floor((self.miles_since_fuel + self._miles_remaining()) / R.FUEL_INTERVAL_MILES)
+        return (
+            drive
+            + (pre_trips * R.PRE_TRIP_MINUTES + post_trips * R.POST_TRIP_MINUTES if insp else 0)
+            + (R.PICKUP_MINUTES if self.event_leg == 0 and self.drives[1].minutes > 0 else 0)
+            + fuel_stops * self.opts.fuel_stop_minutes
+        )
+
     def _needs_restart(self) -> bool:
-        # A 10-h rest would be followed by a restart anyway (no roll-off), so go straight to 34 h.
-        return self.cycle > R.CYCLE_RESTART_THRESHOLD
+        """Whether the next duty period should be preceded by a 34-hour restart, not a 10-h rest.
+
+        Called when a period ends (its post-trip is counted here) or is about to open. No
+        restart while the rest of the trip's driving fits in the cycle. Otherwise restart
+        once the next period could not drive a useful stretch (``MIN_USEFUL_DRIVING``, or all
+        the remaining driving if less) after its unavoidable on-duty work. Because a period
+        that ends with a rest reopens with the same answer, a rest is never followed by a
+        restart straight away.
+        """
+        drive = self._driving_remaining()
+        if drive <= 0:
+            return False
+        cycle = self.cycle + self._post_trip_reserve()
+        if cycle + self._work_needed(drive, opening=True) <= R.CYCLE_LIMIT + _MINUTE_EPS:
+            return False
+        insp = self.opts.include_inspections
+        lead = (R.PRE_TRIP_MINUTES + R.POST_TRIP_MINUTES) if insp else 0
+        if self.event_leg == 0 and self.pos_leg == 1:  # parked at the pickup
+            lead += R.PICKUP_MINUTES
+        if self._fuel_room(self.drives[self.pos_leg]) < 1:
+            lead += self.opts.fuel_stop_minutes
+        room = R.CYCLE_LIMIT - cycle - lead
+        return room < min(drive, R.MIN_USEFUL_DRIVING)
+
+    def _restart_before_stop(self, minutes: int) -> bool:
+        """Whether an on-duty stop of ``minutes`` would leave no cycle room to drive on.
+
+        If so, the restart is taken before the stop, so the recap never passes 70 h mid-trip.
+        """
+        drive = self._driving_remaining()
+        if drive <= 0 or self.window_start is None:
+            return False
+        after = self.cycle + minutes
+        if after + self._work_needed(drive, opening=False) <= R.CYCLE_LIMIT + _MINUTE_EPS:
+            return False
+        return floor(R.CYCLE_LIMIT - self._post_trip_reserve() - after + _MINUTE_EPS) < 1
 
     # ----- driving loop ---------------------------------------------------------
 
@@ -234,6 +314,11 @@ class _Planner:
             return 1  # degenerate (>1,000 mi per minute) profile: always make progress
         return max(room, 0)
 
+    def _fuel_soon(self) -> bool:
+        """Fuel will be due within ``FUEL_EARLY_MILES`` and the trip goes past that point."""
+        left = R.FUEL_INTERVAL_MILES - self.miles_since_fuel
+        return left < R.FUEL_EARLY_MILES and self._miles_remaining() > left + R.MILE_EPS
+
     def _drive_leg(self, leg_index: int) -> None:
         self.pos_leg, self.progress = leg_index, 0
         drive = self.drives[leg_index]
@@ -247,7 +332,12 @@ class _Planner:
             return
 
         cycle_room = floor(R.CYCLE_LIMIT - self.cycle + _MINUTE_EPS)
+        if self.cycle + self._work_needed(self._driving_remaining(), opening=False) > R.CYCLE_LIMIT + _MINUTE_EPS:
+            # A restart will interrupt the trip: stop driving early enough that the
+            # post-trip before it still ends within 70 h.
+            cycle_room = floor(R.CYCLE_LIMIT - self._post_trip_reserve() - self.cycle + _MINUTE_EPS)
         elapsed = self.t - self.window_start
+        leg_left = drive.minutes - self.progress
 
         # 1. 70-hour cycle exhausted: 34-hour restart.
         if cycle_room < 1:
@@ -255,25 +345,32 @@ class _Planner:
             return
         # 2. 11-hour driving or 14-hour window exhausted: 10-hour rest.
         if self.drive_in_period >= R.MAX_DRIVING or elapsed >= R.DUTY_WINDOW:
-            self._end_duty_period(restart=self._needs_restart())
+            self._end_duty_period()
             return
 
         fuel_room = self._fuel_room(drive)
         fuel_due = fuel_room < 1
+        fuel = self.opts.fuel_stop_minutes
 
         # 3. 8 hours of driving since the last 30-min interruption.
         if self.drive_since_break >= R.BREAK_AFTER_DRIVING:
-            if fuel_due and self.opts.fuel_stop_minutes >= R.BREAK_MINUTES:
-                self._fuel()  # a >= 30-min fuel stop satisfies the break
-            elif R.DUTY_WINDOW - (elapsed + R.BREAK_MINUTES) < 1:
-                # The window would close during the break: rest instead of a wasted break.
-                self._end_duty_period(restart=self._needs_restart())
+            if (fuel_due or self._fuel_soon()) and fuel >= R.BREAK_MINUTES:
+                self._fuel_stop()  # a >= 30-min fuel stop satisfies the break
+                return
+            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - R.BREAK_MINUTES, cycle_room)
+            if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
+                # Too little driving would follow the break: end the period instead.
+                self._end_duty_period()
             else:
                 self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES)
             return
         # 4. Fuel interval reached.
         if fuel_due:
-            self._fuel()
+            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - fuel)
+            if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
+                self._end_duty_period()  # fuel, post-trip and rest at the same stop
+            else:
+                self._fuel_stop()
             return
         # 5. Drive until the first limit binds.
         chunk = min(
@@ -282,9 +379,16 @@ class _Planner:
             R.BREAK_AFTER_DRIVING - self.drive_since_break,
             cycle_room,
             fuel_room,
-            drive.minutes - self.progress,
+            leg_left,
         )
         self._drive(max(1, int(chunk)))
+
+    def _fuel_stop(self) -> None:
+        """Fuel now, unless that would strand the cycle: then restart first (fuel comes after)."""
+        if self._restart_before_stop(self.opts.fuel_stop_minutes):
+            self._end_duty_period(restart=True)
+        else:
+            self._fuel()
 
     def _fuel(self) -> None:
         self._stationary(R.Kind.FUEL, R.ON, self.opts.fuel_stop_minutes)
@@ -299,6 +403,11 @@ class _Planner:
         # At the pickup: position is the start of leg 1, events still belong to leg 0.
         self.pos_leg, self.progress = 1, 0
         self._ensure_duty_period()
+        if self._restart_before_stop(R.PICKUP_MINUTES):
+            self._end_duty_period(restart=True)
+            self._ensure_duty_period()
+        if self._fuel_soon() and not self._restart_before_stop(R.PICKUP_MINUTES + self.opts.fuel_stop_minutes):
+            self._fuel()  # fuel at the shipper rather than a few miles down the road
         self._stationary(R.Kind.PICKUP, R.ON, R.PICKUP_MINUTES)
 
         self.event_leg = 1

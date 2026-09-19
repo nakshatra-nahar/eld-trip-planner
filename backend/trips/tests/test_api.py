@@ -118,6 +118,10 @@ def test_plan_accepts_cycle_bounds(client, fake_planner, cycle):
         ({"start_time": "21/09/2026 08:00"}, "start_time"),
         ({"start_time": "2026-02-30T08:00"}, "start_time"),
         ({"start_time": ""}, "start_time"),
+        ({"start_time": "9999-12-31T23:00"}, "start_time"),
+        ({"start_time": "1850-01-01T08:00"}, "start_time"),
+        ({"current_cycle_used_hours": True}, "current_cycle_used_hours"),
+        ({"pickup_location": {"lat": True, "lon": -87}}, "pickup_location.lat"),
         ({"pickup_location": {}}, "pickup_location"),
         ({"pickup_location": {"query": "   "}}, "pickup_location"),
         ({"pickup_location": {"lat": 41.0}}, "pickup_location"),
@@ -144,6 +148,16 @@ def test_plan_missing_everything(client, fake_planner):
 @pytest.mark.parametrize("raw", ["{not json", '{"current_cycle_used_hours": NaN}', "[]"])
 def test_plan_malformed_json(client, fake_planner, raw):
     assert_api_error(post(client, raw), 400, "validation_error")
+
+
+def test_plan_body_too_large(client, fake_planner, settings):
+    settings.DATA_UPLOAD_MAX_MEMORY_SIZE = 1000
+    raw = '{"start_time": "' + "x" * 2000 + '"}'
+    assert_api_error(post(client, raw), 413, "payload_too_large")
+
+
+def test_plan_deeply_nested_json(client, fake_planner):
+    assert_api_error(post(client, "[" * 100_000 + "]" * 100_000), 400, "validation_error")
 
 
 def test_plan_rejects_non_json_content_type(client):
@@ -184,9 +198,29 @@ def test_plan_unexpected_error_is_json_500(client, monkeypatch):
 
 def test_geocode(client, monkeypatch):
     result = {"label": "Joliet, Illinois, United States", "short_label": "Joliet, IL", "lat": 41.5, "lon": -88.1}
-    monkeypatch.setattr(geocoding, "geocode", lambda q, limit=6: [result] if q == "joliet" else [])
+    seen = {}
+
+    def fake(q, limit=6, allow_fallback=True):
+        seen["allow_fallback"] = allow_fallback
+        return [result] if q == "joliet" else []
+
+    monkeypatch.setattr(geocoding, "geocode", fake)
     resp = client.get("/api/geocode/", {"q": "  joliet "})
     assert resp.status_code == 200 and resp.json() == {"results": [result]}
+    assert seen["allow_fallback"] is False  # autocomplete never hits Nominatim
+
+
+def test_geocode_is_rate_limited(client, monkeypatch, settings):
+    from django.core.cache import cache
+    from rest_framework.settings import api_settings
+    from rest_framework.throttling import ScopedRateThrottle
+
+    cache.clear()
+    monkeypatch.setattr(ScopedRateThrottle, "THROTTLE_RATES", {**api_settings.DEFAULT_THROTTLE_RATES, "geocode": "2/min"})
+    monkeypatch.setattr(geocoding, "geocode", lambda q, limit=6, allow_fallback=True: [])
+    codes = [client.get("/api/geocode/", {"q": "joliet"}).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+    cache.clear()
 
 
 @pytest.mark.parametrize("params", [{}, {"q": ""}, {"q": "a"}, {"q": " a "}, {"q": "x" * 201}, {"q": "ok", "limit": 0}])
@@ -196,7 +230,7 @@ def test_geocode_validation(client, params):
 
 
 def test_geocode_upstream_down(client, monkeypatch):
-    def down(q, limit=6):
+    def down(q, limit=6, allow_fallback=True):
         raise UpstreamUnavailable("Geocoding service unavailable (photon, nominatim).")
 
     monkeypatch.setattr(geocoding, "geocode", down)

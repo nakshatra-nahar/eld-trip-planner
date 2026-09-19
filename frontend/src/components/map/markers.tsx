@@ -68,7 +68,7 @@ export function StopMarker({ place, active, onHover }: StopMarkerProps) {
   return (
     <button
       type="button"
-      aria-label={`${place.stops.map((s) => s.label).join(', ')} near ${place.title}`}
+      aria-label={`${place.stops.map((s) => s.label).join(', ')} at ${place.title}`}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
       onFocus={() => onHover(true)}

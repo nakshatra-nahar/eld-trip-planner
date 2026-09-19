@@ -12,9 +12,9 @@ import { ResultsSkeleton } from './components/states/ResultsSkeleton'
 import { TripSummary, TripSummarySkeleton } from './components/summary/TripSummary'
 import { TopBar } from './components/TopBar'
 import { Card } from './components/ui'
-import { EMPTY_LOG_HEADER, useLogHeader } from './hooks/useLogHeader'
+import { EMPTY_LOG_HEADER, SAMPLE_LOG_HEADER, useLogHeader } from './hooks/useLogHeader'
 import { api, type ApiClient, ApiRequestError, describeError } from './lib/api'
-import { nextFullHour } from './lib/format'
+import { formatMiles, nextFullHour, placeLabel } from './lib/format'
 import type { PlanRequest, PlanResponse, TimelineEvent } from './types/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
@@ -40,7 +40,7 @@ function initialValues(): PlannerValues {
 
 function valuesFromPlan(plan: PlanResponse): PlannerValues {
   const { input } = plan
-  const loc = (l: PlanResponse['input']['current_location']) => fromResolved(l.label, l.lat, l.lon)
+  const loc = (l: PlanResponse['input']['current_location']) => fromResolved(placeLabel(l.label), l.lat, l.lon)
   return {
     current: loc(input.current_location),
     pickup: loc(input.pickup_location),
@@ -69,18 +69,34 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focus, setFocus] = useState<MapFocus | null>(null)
   const [lastRequest, setLastRequest] = useState<PlanRequest | null>(null)
+  /** True while the plan on screen is the bundled sample, not a live result. */
+  const [isSample, setIsSample] = useState(false)
+  const [announcement, setAnnouncement] = useState('')
   const { header, setHeader, update: updateHeader } = useLogHeader()
 
   const inflight = useRef<AbortController | null>(null)
   const mapBoxRef = useRef<HTMLDivElement>(null)
+  const overviewHeadingRef = useRef<HTMLHeadingElement>(null)
+  /** Set when a user action produced the plan, so focus moves to it once it renders. */
+  const focusPlan = useRef(false)
 
-  const showPlan = useCallback((next: PlanResponse) => {
+  const showPlan = useCallback((next: PlanResponse, { focus = false } = {}) => {
+    focusPlan.current = focus
     setPlan(next)
     setValues(valuesFromPlan(next))
     setStatus('success')
     setEditing(false)
     setSelectedId(null)
+    const sheets = next.daily_logs.length
+    setAnnouncement(`Trip planned: ${formatMiles(next.summary.total_miles)}, ${sheets} log sheet${sheets === 1 ? '' : 's'}.`)
   }, [])
+
+  // The form unmounts when a plan arrives; put keyboard and screen-reader focus on the result.
+  useEffect(() => {
+    if (!plan || editing || !focusPlan.current) return
+    focusPlan.current = false
+    overviewHeadingRef.current?.focus()
+  }, [plan, editing])
 
   // ?demo=1 / ?demo=restart: swap in the offline client and show its fixture immediately.
   useEffect(() => {
@@ -107,26 +123,40 @@ export default function App() {
       setServerErrors({})
       try {
         const result = await client.planTrip(request, controller.signal)
-        showPlan(result)
+        setIsSample(false)
+        showPlan(result, { focus: true })
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return
         setStatus('error')
+        setAnnouncement('')
+        // Errors about a specific field are shown on that field; the card is for everything else.
+        const fieldErrors =
+          err instanceof ApiRequestError && err.code === 'validation_error'
+            ? mapServerDetails(err.details)
+            : err instanceof ApiRequestError && err.code === 'geocode_failed'
+              ? mapServerDetails(err.details, "We couldn't find this place. Pick a suggestion or add the state.")
+              : {}
+        if (Object.keys(fieldErrors).length) {
+          setError(null)
+          setServerErrors(fieldErrors)
+          setEditing(true)
+          requestAnimationFrame(() => document.querySelector<HTMLElement>('form [aria-invalid="true"]')?.focus())
+          return
+        }
         // Retrying only helps when the failure was transient (network or upstream), not bad input.
         const retryable = !(err instanceof ApiRequestError) || !INPUT_ERRORS.has(err.code)
         setError({ ...describeError(err), retryable })
-        if (err instanceof ApiRequestError && err.code === 'validation_error') {
-          setServerErrors(mapServerDetails(err.details))
-          setEditing(true)
-        }
       }
     },
     [client, showPlan],
   )
 
+  // Only shows the recorded fixture. The live client stays in place, so the next
+  // "Plan trip" really plans the trip that was entered.
   const loadSample = useCallback(async () => {
-    const demo = await loadDemo('?demo=1')
-    setClient(demo.client)
-    showPlan(demo.plan)
+    const { plan: sample } = await loadDemo('?demo=1')
+    setIsSample(true)
+    showPlan(sample, { focus: true })
   }, [showPlan])
 
   const selectEvent = useCallback((event: TimelineEvent) => {
@@ -160,7 +190,7 @@ export default function App() {
       ['pickup', pu.selected],
       ['dropoff', dr.selected],
     ] as const
-    return entries.flatMap(([role, s]) => (s ? [{ role, lngLat: [s.lon, s.lat], label: s.short_label }] : []))
+    return entries.flatMap(([role, s]) => (s ? [{ role, lngLat: [s.lon, s.lat], label: placeLabel(s.short_label) }] : []))
   }, [cur.selected, pu.selected, dr.selected])
 
   const loading = status === 'loading'
@@ -168,11 +198,16 @@ export default function App() {
 
   return (
     <div className="min-h-dvh">
-      <TopBar demo={client !== api} />
+      <TopBar demo={IS_DEMO || isSample} />
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
 
       <main className="mx-auto grid max-w-[1600px] grid-cols-[minmax(0,1fr)] gap-5 px-4 py-5 sm:px-6 lg:py-6">
         <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-5 lg:grid-cols-[440px_minmax(0,1fr)]">
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5" data-print-hide>
+          {/* Below lg this column dissolves (display: contents) so the map can sit right after
+              the trip card and before the long summary. */}
+          <div className="contents min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)] lg:gap-5" data-print-hide>
             <Card>
               {showForm ? (
                 <PlannerForm
@@ -184,11 +219,13 @@ export default function App() {
                   header={header}
                   onHeaderChange={updateHeader}
                   onHeaderClear={() => setHeader(EMPTY_LOG_HEADER)}
+                  onHeaderSample={() => setHeader(SAMPLE_LOG_HEADER)}
                   serverErrors={serverErrors}
                 />
               ) : (
                 <TripOverview
                   plan={plan}
+                  headingRef={overviewHeadingRef}
                   onEdit={() => setEditing(true)}
                   onNew={() => {
                     setValues(initialValues())
@@ -196,6 +233,9 @@ export default function App() {
                     setStatus('idle')
                     setSelectedId(null)
                     setEditing(true)
+                    setIsSample(false)
+                    setAnnouncement('')
+                    if (!IS_DEMO) setClient(api)
                   }}
                 />
               )}
@@ -208,7 +248,9 @@ export default function App() {
                 onRetry={error.retryable && lastRequest ? () => runPlan(lastRequest) : undefined}
               />
             )}
-            {loading ? <TripSummarySkeleton /> : plan && <TripSummary key={plan.summary.end_time} plan={plan} />}
+            <div className="order-1 min-w-0 lg:order-none">
+              {loading ? <TripSummarySkeleton /> : plan && <TripSummary key={plan.summary.end_time} plan={plan} />}
+            </div>
           </div>
 
           <div
@@ -237,10 +279,11 @@ export default function App() {
           </div>
         )}
 
-        <footer data-print-hide className="flex flex-wrap justify-between gap-2 pb-2 text-xs text-ink-400">
+        <footer data-print-hide className="flex flex-wrap justify-between gap-2 pb-2 text-xs text-ink-500">
           <p>For trip planning only. Always verify against your ELD and carrier policy.</p>
           <p>
-            Maps © OpenFreeMap, © OpenMapTiles, data © OpenStreetMap contributors · Routing by OSRM · Search by Photon
+            Maps © OpenFreeMap, © OpenMapTiles, data © OpenStreetMap contributors · Routing by OSRM · Search by Photon ·
+            Places © GeoNames (CC BY 4.0)
           </p>
         </footer>
       </main>

@@ -12,13 +12,17 @@ from datetime import datetime
 from rest_framework import serializers
 
 START_TIME_FORMATS = ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S")
+START_YEARS = (2000, 2100)  # far-off dates overflow the day arithmetic of multi-day plans
 MAX_QUERY_LEN = 200
 
 
 class FiniteFloatField(serializers.FloatField):
-    """FloatField that rejects NaN/Infinity (JSON parsers may let them through)."""
+    """FloatField that rejects NaN/Infinity (JSON parsers may let them through) and booleans
+    (which DRF would otherwise coerce to 1.0/0.0)."""
 
     def to_internal_value(self, data):
+        if isinstance(data, bool):
+            self.fail("invalid")
         value = super().to_internal_value(data)
         if not math.isfinite(value):
             self.fail("invalid")
@@ -57,9 +61,12 @@ class PlanRequestSerializer(serializers.Serializer):
     def validate_start_time(self, value: str) -> datetime:
         for fmt in START_TIME_FORMATS:
             try:
-                return datetime.strptime(value.strip(), fmt).replace(second=0)
+                parsed = datetime.strptime(value.strip(), fmt).replace(second=0)
             except ValueError:
                 continue
+            if not START_YEARS[0] <= parsed.year <= START_YEARS[1]:
+                raise serializers.ValidationError(f"Start time must be between {START_YEARS[0]} and {START_YEARS[1]}.")
+            return parsed
         raise serializers.ValidationError('Use the local time format "YYYY-MM-DDTHH:MM".')
 
     def validate(self, attrs):

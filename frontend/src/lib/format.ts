@@ -71,9 +71,36 @@ export function formatMiles(miles: number, { unit = true } = {}): string {
   return unit ? `${value} mi` : value
 }
 
-/** Hours with up to two decimals, e.g. "6.03". */
-export function formatHours(hours: number): string {
-  return Number.isInteger(hours) ? String(hours) : hours.toFixed(2).replace(/0$/, '')
+/**
+ * Hours as an hh:mm clock span, the way ELD printouts show totals: 22.1667 -> "22:10",
+ * 0.5833 -> "0:35". Used on the log sheet (Total Hours column and Recap).
+ */
+export function formatHoursClock(hours: number): string {
+  return formatMinutesClock(Math.round(hours * 60))
+}
+
+/** Whole minutes as "h:mm", e.g. 1440 -> "24:00". */
+export function formatMinutesClock(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes))
+  return `${Math.floor(total / 60)}:${pad(total % 60)}`
+}
+
+/** "I 84 near Joliet, IL" -> "Joliet, IL"; other names are returned unchanged. */
+export function withoutRoad(location: string): string {
+  const m = /^.+?\snear\s+(.+)$/i.exec(location || '')
+  return m ? m[1] : location
+}
+
+/**
+ * One display form for every place name in the app (overview, itinerary, map, logs):
+ * "Saint Louis, MO" and "St. Louis, MO" both become "St. Louis, MO", and interstates are
+ * written the way drivers read them ("I 44" -> "I-44"). With `withRoad: false` the
+ * "I-44 near" prefix is dropped, leaving the city/state an FMCSA remark needs.
+ */
+export function placeLabel(name: string, { withRoad = true }: { withRoad?: boolean } = {}): string {
+  let s = (name || '').trim().replace(/\s+/g, ' ')
+  if (!withRoad) s = withoutRoad(s)
+  return s.replace(/\bSaint\s+(?=[A-Z])/g, 'St. ').replace(/\bI[\s-]?(\d{1,3})\b/g, 'I-$1')
 }
 
 /** Minutes between two wall-clock strings. */

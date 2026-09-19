@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { DUTY_ORDER, DUTY_STATUS } from '../../lib/duty'
 import { cn } from '../../lib/cn'
-import { formatClock, formatDay, formatDuration, minutesBetween, parseWallTime } from '../../lib/format'
+import { formatClock, formatDay, formatDuration, minutesBetween, parseWallTime, placeLabel } from '../../lib/format'
 import type { DutyStatus, TimelineEvent } from '../../types/api'
 
 interface DutyTimelineBarProps {
@@ -96,7 +96,7 @@ export function DutyTimelineBar({ timeline, className }: DutyTimelineBarProps) {
               {formatDuration(hover.duration_hours)}
             </span>
             <br />
-            <span className="text-ink-500">{hover.start_location.name}</span>
+            <span className="text-ink-500">{placeLabel(hover.start_location.name)}</span>
           </p>
         ) : (
           <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-600">

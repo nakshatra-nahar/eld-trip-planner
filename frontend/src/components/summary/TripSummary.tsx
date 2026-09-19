@@ -1,7 +1,7 @@
-import { BedDouble, CalendarDays, ChevronDown, Fuel, Gauge, Hourglass, Info, Timer, TriangleAlert } from 'lucide-react'
+import { BedDouble, CalendarDays, ChevronDown, Coffee, Fuel, Gauge, Hourglass, Info, RotateCcw, Timer, TriangleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '../../lib/cn'
-import { formatDuration, formatHours, formatMiles } from '../../lib/format'
+import { formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { PlanResponse } from '../../types/api'
 import { Card, Skeleton } from '../ui'
 import { DutyTimelineBar } from './DutyTimelineBar'
@@ -34,38 +34,45 @@ export function TripSummary({ plan }: { plan: PlanResponse }) {
           </p>
         </div>
         <ol className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] text-ink-200">
-          <li className="font-medium text-white">{input.current_location.label}</li>
+          <li className="font-medium text-white">{placeLabel(input.current_location.label)}</li>
           {legs[0]?.distance_miles > 0.1 && (
-            <li className="tabular font-mono text-[11px] text-ink-400">— {formatMiles(legs[0].distance_miles)} →</li>
+            <li className="tabular font-mono text-[11px] text-ink-300">— {formatMiles(legs[0].distance_miles)} →</li>
           )}
-          <li className="font-medium text-hw-300">{input.pickup_location.label}</li>
-          <li className="tabular font-mono text-[11px] text-ink-400">— {formatMiles(legs[1]?.distance_miles ?? 0)} →</li>
-          <li className="font-medium text-white">{input.dropoff_location.label}</li>
+          <li className="font-medium text-hw-300">{placeLabel(input.pickup_location.label)}</li>
+          <li className="tabular font-mono text-[11px] text-ink-300">— {formatMiles(legs[1]?.distance_miles ?? 0)} →</li>
+          <li className="font-medium text-white">{placeLabel(input.dropoff_location.label)}</li>
         </ol>
       </div>
 
-      <dl className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-3">
+      <dl className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-4">
         <Stat icon={<Gauge />} label="Driving" value={formatDuration(summary.total_driving_hours)} />
-        <Stat icon={<Timer />} label="On duty" value={formatDuration(summary.total_on_duty_hours)} />
+        <Stat
+          icon={<Timer />}
+          label="On-duty total"
+          value={formatDuration(summary.total_on_duty_hours)}
+          sub={`incl. ${formatDuration(summary.total_driving_hours)} driving`}
+        />
         <Stat icon={<CalendarDays />} label="Log sheets" value={String(summary.num_days)} />
         <Stat icon={<Fuel />} label="Fuel stops" value={String(summary.num_fuel_stops)} />
+        <Stat icon={<BedDouble />} label="10-hr rests" value={String(summary.num_rests)} />
+        <Stat icon={<RotateCcw />} label="34-hr restarts" value={String(summary.num_restarts)} />
         <Stat
-          icon={<BedDouble />}
-          label="Rests / restarts"
-          value={`${summary.num_rests} / ${summary.num_restarts}`}
-          sub={`${summary.num_breaks} × 30-min break${summary.num_breaks === 1 ? '' : 's'}`}
+          icon={<Coffee />}
+          label="30-min breaks"
+          value={String(summary.num_breaks)}
+          sub={summary.num_breaks === 0 ? 'Not needed separately' : undefined}
         />
         <Stat
           icon={<Hourglass />}
           label="Cycle left at end"
-          value={`${formatHours(summary.cycle_hours_available_at_end)} h`}
-          sub={`${formatHours(summary.cycle_hours_used_at_end)} of 70 h used`}
+          value={formatDuration(summary.cycle_hours_available_at_end)}
+          sub={`${formatDuration(summary.cycle_hours_used_at_end)} of 70h used`}
           tone={cycleTone}
         />
       </dl>
 
       <div className="px-5 pt-4 pb-3 sm:px-6">
-        <h3 className="text-[11px] font-semibold tracking-[0.14em] text-ink-500 uppercase">Duty status over the trip</h3>
+        <h2 className="text-[11px] font-semibold tracking-[0.14em] text-ink-500 uppercase">Duty status over the trip</h2>
         <DutyTimelineBar timeline={plan.timeline} className="mt-1" />
       </div>
 
@@ -116,22 +123,25 @@ function Stat({
   tone?: 'ok' | 'warn' | 'danger'
 }) {
   return (
-    <div className="bg-white px-4 py-3">
-      <dt className="flex items-center gap-1.5 text-[11px] font-medium text-ink-500 [&_svg]:size-3.5 [&_svg]:text-ink-400">
+    <div className="bg-white px-3.5 py-3">
+      <dt className="flex items-start gap-1.5 leading-tight text-[11px] font-medium text-ink-500 [&_svg]:mt-px [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-ink-400">
         {icon}
         {label}
       </dt>
-      <dd
-        className={cn(
-          'tabular mt-1 font-display text-xl leading-none font-bold tracking-tight',
-          tone === 'ok' && 'text-ink-900',
-          tone === 'warn' && 'text-[#b45309]',
-          tone === 'danger' && 'text-danger-700',
-        )}
-      >
-        {value}
+      {/* A <dl> group may hold only <dt>/<dd>, so the subline lives inside the <dd>. */}
+      <dd className="mt-1">
+        <span
+          className={cn(
+            'tabular block font-display text-[19px] leading-none font-bold tracking-tight whitespace-nowrap',
+            tone === 'ok' && 'text-ink-900',
+            tone === 'warn' && 'text-[#b45309]',
+            tone === 'danger' && 'text-danger-700',
+          )}
+        >
+          {value}
+        </span>
+        {sub && <span className="mt-1 block text-[11px] leading-tight text-ink-500">{sub}</span>}
       </dd>
-      {sub && <p className="mt-1 text-[11px] leading-tight text-ink-500">{sub}</p>}
     </div>
   )
 }
@@ -144,8 +154,8 @@ export function TripSummarySkeleton() {
         <Skeleton className="mt-3 h-10 w-44 opacity-20" />
         <Skeleton className="mt-4 h-3.5 w-64 opacity-20" />
       </div>
-      <div className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-3">
-        {Array.from({ length: 6 }, (_, i) => (
+      <div className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-4">
+        {Array.from({ length: 8 }, (_, i) => (
           <div key={i} className="bg-white px-4 py-3.5">
             <Skeleton className="h-3 w-16" />
             <Skeleton className="mt-2 h-5 w-14" />

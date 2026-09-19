@@ -1,6 +1,7 @@
 import { CalendarDays, ListOrdered, Signpost } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '../../lib/cn'
+import { placeLabel } from '../../lib/format'
 import type { LogHeaderDetails, PlanResponse, TimelineEvent } from '../../types/api'
 import { DailyLogsView } from '../logsheet'
 import { Card, type TabItem, Tabs } from '../ui'
@@ -19,7 +20,7 @@ interface ResultsPanelProps {
 export function ResultsPanel({ plan, header, selectedId, onSelectEvent }: ResultsPanelProps) {
   const [tab, setTab] = useState<TabKey>('itinerary')
   const { input } = plan
-  const tripLabel = `${input.current_location.label} → ${input.pickup_location.label} → ${input.dropoff_location.label}`
+  const tripLabel = [input.current_location, input.pickup_location, input.dropoff_location].map((l) => placeLabel(l.label)).join(' → ')
 
   const items: TabItem<TabKey>[] = [
     { key: 'itinerary', label: 'Itinerary', icon: <ListOrdered className="size-4" aria-hidden /> },

@@ -1,6 +1,6 @@
 import { type CSSProperties, useId } from 'react'
 import { cn } from '../../lib/cn'
-import { formatHours } from '../../lib/format'
+import { formatDuration } from '../../lib/format'
 
 interface CycleInputProps {
   value: string
@@ -53,7 +53,7 @@ export function CycleInput({ value, onChange, error }: CycleInputProps) {
           value={used}
           onChange={(e) => onChange(e.target.value)}
           aria-label="Current cycle used, hours"
-          aria-valuetext={`${formatHours(used)} hours used`}
+          aria-valuetext={`${formatDuration(used)} used`}
           className="range-track h-11 w-full bg-clip-content py-[19px]"
           style={{ '--fill': `${(used / LIMIT) * 100}%`, '--range-color': color } as CSSProperties}
         />
@@ -68,7 +68,7 @@ export function CycleInput({ value, onChange, error }: CycleInputProps) {
         {error ??
           (tone === 'danger'
             ? 'No hours left: the plan will start with a 34-hour restart.'
-            : `${formatHours(left)} h available in the cycle${tone === 'warn' ? ', a 34-hour restart is likely.' : '.'}`)}
+            : `${formatDuration(left)} available in the cycle${tone === 'warn' ? ', a 34-hour restart is likely.' : '.'}`)}
       </p>
     </div>
   )

@@ -15,10 +15,12 @@ from urllib.parse import urlparse
 
 import requests
 
-from trips.hos.profile import LegProfile, RouteStep
+from trips.hos.profile import LegProfile, LonLat, RouteStep
 
 from .errors import RouteNotFound, UpstreamUnavailable
 from .http import Deadline, session
+from .instructions import road_label
+from .units import METERS_PER_MILE, TRUCK_MAX_MPS
 
 log = logging.getLogger(__name__)
 
@@ -26,16 +28,12 @@ OSRM_HOSTS = (
     "https://router.project-osrm.org",
     "https://routing.openstreetmap.de/routed-car",
 )
-TIMEOUT_S = 15.0
-ATTEMPTS_PER_HOST = 2  # 1 retry
-METERS_PER_MILE = 1609.344
-TRUCK_SPEED_CAP_MPH = 65.0
-TRUCK_MAX_MPS = TRUCK_SPEED_CAP_MPH * METERS_PER_MILE / 3600.0
+TIMEOUT_S = 15.0  # read timeout for the last host
+CONNECT_TIMEOUT_S = 3.05
+ATTEMPTS_PER_HOST = 2  # 1 retry, for connection errors and 5xx/429 only
 
 # OSRM "code" values meaning "your input has no route" (not a server problem).
 _NO_ROUTE_CODES = {"NoRoute", "NoSegment", "NoMatch", "NoTrips", "InvalidValue", "InvalidQuery", "TooBig"}
-
-LonLat = tuple[float, float]
 
 
 @dataclass
@@ -58,20 +56,15 @@ def _truck_minutes(dist_m: float, dur_s: float) -> float:
     return max(dur_s, dist_m / TRUCK_MAX_MPS) / 60.0
 
 
-def _step_road(step: dict[str, Any]) -> str:
-    ref = (step.get("ref") or "").split(";")[0].strip()
-    return ref or (step.get("name") or "").strip()
-
-
 def _leg_steps(steps: list[dict[str, Any]], total_miles: float) -> list[RouteStep]:
     """Leg-relative ``RouteStep``s, scaled so step miles agree with the annotation total."""
     raw = [float(s.get("distance") or 0.0) / METERS_PER_MILE for s in steps]
     scale = total_miles / sum(raw) if sum(raw) > 0 else 0.0
     out: list[RouteStep] = []
     mile = 0.0
-    for step, miles in zip(steps, raw):
+    for step, miles in zip(steps, raw, strict=True):
         end = mile + miles * scale
-        out.append(RouteStep(start_mile=mile, end_mile=end, road=_step_road(step)))
+        out.append(RouteStep(start_mile=mile, end_mile=end, road=road_label(step)))
         mile = end
     return out
 
@@ -100,7 +93,7 @@ def parse_route(data: dict[str, Any], provider: str = "OSRM") -> RouteResult:
 
     legs: list[RoutedLeg] = []
     offset = 0
-    for leg, n in zip(legs_json, counts):
+    for leg, n in zip(legs_json, counts, strict=True):
         coords = [(float(c[0]), float(c[1])) for c in geometry[offset : offset + n]]
         offset += n - 1
         dist_m = [float(d) for d in leg["annotation"]["distance"]]
@@ -112,7 +105,7 @@ def parse_route(data: dict[str, Any], provider: str = "OSRM") -> RouteResult:
         gap_scale = float(leg.get("duration") or 0.0) / sum(dur_s) if sum(dur_s) > 0 else 1.0
         dur_s = [t * max(gap_scale, 1.0) for t in dur_s]
         seg_miles = [d / METERS_PER_MILE for d in dist_m]
-        seg_minutes = [_truck_minutes(d, t) for d, t in zip(dist_m, dur_s)]
+        seg_minutes = [_truck_minutes(d, t) for d, t in zip(dist_m, dur_s, strict=True)]
         if len(coords) < 2:  # degenerate zero-length leg (current == pickup)
             coords = coords * 2 if coords else [(0.0, 0.0), (0.0, 0.0)]
             seg_miles, seg_minutes = [0.0], [0.0]
@@ -152,6 +145,16 @@ ROUTE_PARAMS = {
 }
 
 
+def _timeouts(host: str, deadline: Deadline) -> tuple[float, float]:
+    """(connect, read) timeouts. While another host is still untried, the read timeout is
+    capped at half the remaining budget so a hung host cannot use it all."""
+    read = TIMEOUT_S
+    remaining = deadline.remaining()
+    if host != OSRM_HOSTS[-1] and remaining is not None:
+        read = min(read, remaining / 2)
+    return deadline.timeout(CONNECT_TIMEOUT_S), deadline.timeout(read)
+
+
 def fetch_route(waypoints: list[LonLat], deadline: Deadline | None = None) -> RouteResult:
     """Route through ``waypoints`` [(lon, lat), ...], trying each OSRM host in turn."""
     deadline = deadline or Deadline(None)
@@ -162,7 +165,12 @@ def fetch_route(waypoints: list[LonLat], deadline: Deadline | None = None) -> Ro
             if deadline.expired:
                 raise UpstreamUnavailable("Routing timed out. Please try again.")
             try:
-                resp = session().get(route_url(host, waypoints), params=ROUTE_PARAMS, timeout=deadline.timeout(TIMEOUT_S))
+                resp = session().get(route_url(host, waypoints), params=ROUTE_PARAMS, timeout=_timeouts(host, deadline))
+            except requests.Timeout as exc:
+                # A hung host will not answer a retry either: move on to the next one.
+                failures.append(f"{provider}: {exc.__class__.__name__}")
+                log.warning("OSRM %s attempt %d timed out: %s", host, attempt + 1, exc)
+                break
             except requests.RequestException as exc:
                 failures.append(f"{provider}: {exc.__class__.__name__}")
                 log.warning("OSRM %s attempt %d failed: %s", host, attempt + 1, exc)

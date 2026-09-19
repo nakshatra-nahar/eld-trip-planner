@@ -8,6 +8,9 @@ const LATIN_LABEL = ['coalesce', ['get', 'name:latin'], ['get', 'name_en'], ['ge
 
 type Expr = unknown
 
+/** Positron's city/town/village label layers (country and state labels are left alone). */
+const SETTLEMENT_LABELS = new Set(['label_city', 'label_city_capital', 'label_town', 'label_village'])
+
 /** Swaps every `['get', key]` for `['coalesce', ['get', key], fallback]` inside an expression. */
 function defaultGet(expr: Expr, key: string, fallback: unknown): Expr {
   if (!Array.isArray(expr)) return expr
@@ -20,6 +23,9 @@ function defaultGet(expr: Expr, key: string, fallback: unknown): Expr {
  * means Osage/Cherokee syllabics whose glyph ranges OpenFreeMap does not host (404s in the console),
  * so labels are reduced to their Latin form. Boundary filters also compare a sometimes-null
  * `admin_level`, which logs a style warning; default it to 0.
+ *
+ * City and town labels are hung just below their point (falling back to the other sides on
+ * collision): the trip pins stand above their point, so the pin no longer covers the name.
  */
 export function adaptStyle(style: StyleSpecification): StyleSpecification {
   return {
@@ -32,6 +38,13 @@ export function adaptStyle(style: StyleSpecification): StyleSpecification {
         JSON.stringify(next.layout['text-field']).includes('name:nonlatin')
       ) {
         next = { ...next, layout: { ...next.layout, 'text-field': LATIN_LABEL as never } }
+      }
+      if (next.type === 'symbol' && SETTLEMENT_LABELS.has(next.id) && next.layout) {
+        const { 'text-anchor': _anchor, 'text-offset': _offset, ...layout } = next.layout
+        next = {
+          ...next,
+          layout: { ...layout, 'text-variable-anchor': ['top', 'bottom', 'left', 'right'], 'text-radial-offset': 0.75 },
+        }
       }
       if ('filter' in next && next.filter && JSON.stringify(next.filter).includes('"admin_level"')) {
         next = { ...next, filter: defaultGet(next.filter, 'admin_level', 0) as never }

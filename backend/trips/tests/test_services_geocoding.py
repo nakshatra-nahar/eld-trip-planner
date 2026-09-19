@@ -150,3 +150,36 @@ def test_reverse_is_offline():
     assert result == {"label": "Chicago, Illinois, United States", "short_label": "Chicago, IL", "lat": 41.8781, "lon": -87.6298}
     assert geocoding.reverse(43.65, -79.38)["label"] == "Toronto, Ontario, Canada"
     assert geocoding.reverse(51.5, -0.12) is None  # London: outside US/CA
+
+
+def _city(name, state, lon, lat, cc="US"):
+    return photon_feature({"osm_key": "place", "osm_value": "city", "type": "city", "name": name, "state": state,
+                           "country": "United States", "countrycode": cc}, lon, lat)
+
+
+def test_bigger_cities_rank_first_for_partial_names(use, fake_response):
+    """Photon returns Chico, CA before Chicago, IL for "Chic"; population decides."""
+    features = [_city("Chico", "California", -121.84, 39.73), _city("Chico", "Texas", -97.80, 33.30),
+                _city("Chicago", "Illinois", -87.63, 41.88)]
+    use(fake_response(200, {"type": "FeatureCollection", "features": features}))
+    assert geocoding.geocode("Chic")[0]["short_label"] == "Chicago, IL"
+
+
+def test_state_in_query_outranks_population(use, fake_response):
+    features = [_city("Dallas", "Texas", -96.80, 32.78), _city("Dallas", "Georgia", -84.84, 33.92)]
+    use(fake_response(200, {"type": "FeatureCollection", "features": features}))
+    assert geocoding.geocode("Dallas, GA")[0]["short_label"] == "Dallas, GA"
+
+
+def test_autocomplete_skips_nominatim(use, fake_response):
+    fake = use(fake_response(200, {"type": "FeatureCollection", "features": []}))
+    assert geocoding.geocode("zzqx", allow_fallback=False) == []
+    assert len(fake.calls) == 1
+
+
+def test_provider_failure_is_not_cached_as_not_found(use, fake_response):
+    """Photon finds nothing and Nominatim fails: answer [] now, but retry next time."""
+    use(fake_response(200, {"type": "FeatureCollection", "features": []}), requests.Timeout("slow"))
+    assert geocoding.geocode("Joliet") == []
+    use(fake_response(200, PHOTON))
+    assert geocoding.geocode("Joliet")[0]["short_label"] == "Joliet, IL"

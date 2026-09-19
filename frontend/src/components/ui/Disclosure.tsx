@@ -7,12 +7,20 @@ interface DisclosureProps {
   icon?: ReactNode
   summary?: ReactNode
   defaultOpen?: boolean
+  /** Opens the section when it becomes true, e.g. to reveal a field with an error. */
+  forceOpen?: boolean
   children: ReactNode
 }
 
 /** Collapsible section with an accessible header button. Content height animates via CSS grid rows. */
-export function Disclosure({ title, icon, summary, defaultOpen = false, children }: DisclosureProps) {
-  const [open, setOpen] = useState(defaultOpen)
+export function Disclosure({ title, icon, summary, defaultOpen = false, forceOpen = false, children }: DisclosureProps) {
+  const [open, setOpen] = useState(defaultOpen || forceOpen)
+  // Open when forceOpen turns on (adjusting state during render, not in an effect).
+  const [wasForced, setWasForced] = useState(forceOpen)
+  if (forceOpen !== wasForced) {
+    setWasForced(forceOpen)
+    if (forceOpen) setOpen(true)
+  }
   const id = useId()
   return (
     <div className="border-t border-ink-150">

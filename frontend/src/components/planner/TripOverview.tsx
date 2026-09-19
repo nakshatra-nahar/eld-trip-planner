@@ -1,7 +1,8 @@
 import { CalendarClock, Hourglass, PencilLine, Plus } from 'lucide-react'
+import type { Ref } from 'react'
 import { cn } from '../../lib/cn'
 import { ROLE_ICON } from '../../lib/duty'
-import { formatDateTime, formatHours } from '../../lib/format'
+import { formatDateTime, formatDuration, placeLabel } from '../../lib/format'
 import type { PlanResponse } from '../../types/api'
 import { Button } from '../ui'
 
@@ -9,20 +10,22 @@ interface TripOverviewProps {
   plan: PlanResponse
   onEdit: () => void
   onNew: () => void
+  /** Focus target after planning (the form this replaces unmounts). */
+  headingRef?: Ref<HTMLHeadingElement>
 }
 
 /** Compact read-only view of the planned trip's inputs, shown in place of the form after planning. */
-export function TripOverview({ plan, onEdit, onNew }: TripOverviewProps) {
+export function TripOverview({ plan, onEdit, onNew, headingRef }: TripOverviewProps) {
   const { input } = plan
   const stops = [
-    { role: 'current' as const, title: 'Current', label: input.current_location.label },
-    { role: 'pickup' as const, title: 'Pickup', label: input.pickup_location.label },
-    { role: 'dropoff' as const, title: 'Dropoff', label: input.dropoff_location.label },
+    { role: 'current' as const, title: 'Current', label: placeLabel(input.current_location.label) },
+    { role: 'pickup' as const, title: 'Pickup', label: placeLabel(input.pickup_location.label) },
+    { role: 'dropoff' as const, title: 'Dropoff', label: placeLabel(input.dropoff_location.label) },
   ]
   return (
     <div className="p-5 sm:p-6">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-600 uppercase">Planned trip</p>
+        <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-700 uppercase">Planned trip</p>
         <div className="flex shrink-0 gap-1">
           <Button size="sm" variant="secondary" onClick={onEdit} icon={<PencilLine className="size-3.5" aria-hidden />}>
             Edit
@@ -32,8 +35,12 @@ export function TripOverview({ plan, onEdit, onNew }: TripOverviewProps) {
           </Button>
         </div>
       </div>
-      <h1 className="mt-1 font-display text-[22px] leading-tight font-extrabold tracking-tight text-balance text-ink-900">
-        {input.pickup_location.label} <span className="text-hw-500">→</span> {input.dropoff_location.label}
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className="mt-1 font-display text-[22px] leading-tight font-extrabold tracking-tight text-balance text-ink-900 focus:outline-none"
+      >
+        {stops[1].label} <span className="text-hw-500" aria-label="to">→</span> {stops[2].label}
       </h1>
 
       <ol className="mt-4 grid gap-2.5">
@@ -78,7 +85,7 @@ export function TripOverview({ plan, onEdit, onNew }: TripOverviewProps) {
             <Hourglass className="size-3.5" aria-hidden /> Cycle used at start
           </dt>
           <dd className="tabular font-mono font-semibold text-ink-900">
-            {formatHours(input.current_cycle_used_hours)} / 70 h
+            {formatDuration(input.current_cycle_used_hours)} of 70h
           </dd>
         </div>
       </dl>

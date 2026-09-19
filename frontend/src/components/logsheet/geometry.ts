@@ -2,6 +2,7 @@
 // Everything here is framework-free so it can be unit-tested and reused
 // (SVG rendering, exports, legends) without touching the DOM.
 
+import { placeLabel } from '../../lib/format'
 import type { DutyStatus, LogRemark, LogSegment } from '../../types/api'
 
 export const MINUTES_PER_DAY = 1440
@@ -32,7 +33,9 @@ export const REMARKS = {
   rulerBottom: GRID_BOTTOM + 37,
   bracketTop: GRID_BOTTOM + 42,
   bracketDepth: 9,
-  textTop: GRID_BOTTOM + 60, // y where rotated labels start
+  // y where rotated labels start: low enough that a leader's horizontal run (just under the
+  // brackets) clears the ascenders of the label before it (~0.75 * fontSize * cos 45°).
+  textTop: GRID_BOTTOM + 68,
   bottom: 664, // labels must end above this line
   rightLimit: SHEET.width - 16, // labels must end left of this x
 } as const
@@ -144,32 +147,23 @@ export function minutesByStatus(segments: readonly LogSegment[]): StatusMinutes 
 }
 
 /**
- * Hours per status rounded to 0.01 h with the largest-remainder method, so the
- * printed row totals always add up exactly to the printed grand total (24 for a
- * full day), even with minute-precision segments.
+ * Whole minutes per status with the largest-remainder method, so the printed row
+ * totals always add up exactly to the printed grand total (24:00 for a full day),
+ * even when segment boundaries fall on fractional minutes.
  */
-export function roundedHoursByStatus(minutes: StatusMinutes): Record<DutyStatus, number> {
-  const hundredths = STATUS_ORDER.map((s) => (minutes[s] / 60) * 100)
-  const floors = hundredths.map(Math.floor)
-  const target = Math.round(hundredths.reduce((a, b) => a + b, 0))
-  let deficit = target - floors.reduce((a, b) => a + b, 0)
-  const order = hundredths
-    .map((h, i) => ({ i, rem: h - floors[i] }))
-    .sort((a, b) => b.rem - a.rem)
+export function roundedMinutesByStatus(minutes: StatusMinutes): StatusMinutes {
+  const exact = STATUS_ORDER.map((s) => minutes[s])
+  const floors = exact.map(Math.floor)
+  let deficit = Math.round(exact.reduce((a, b) => a + b, 0)) - floors.reduce((a, b) => a + b, 0)
+  const order = exact.map((m, i) => ({ i, rem: m - floors[i] })).sort((a, b) => b.rem - a.rem)
   for (const { i } of order) {
     if (deficit <= 0) break
     floors[i] += 1
     deficit -= 1
   }
-  const out = { OFF: 0, SB: 0, D: 0, ON: 0 } as Record<DutyStatus, number>
-  STATUS_ORDER.forEach((s, i) => (out[s] = floors[i] / 100))
+  const out: StatusMinutes = { OFF: 0, SB: 0, D: 0, ON: 0 }
+  STATUS_ORDER.forEach((s, i) => (out[s] = floors[i]))
   return out
-}
-
-/** Decimal hours as written on the FMCSA sample: "10", "4.5", "1.75", "0.08". */
-export function formatHours(hours: number): string {
-  const fixed = (Math.round(hours * 100) / 100).toFixed(2)
-  return fixed.replace(/\.?0+$/, '')
 }
 
 // ---------- Text ----------
@@ -181,12 +175,6 @@ export function truncate(text: string, max: number): string {
   if (t.length <= max) return t
   if (max === 1) return '…'
   return `${t.slice(0, max - 1).trimEnd()}…`
-}
-
-/** "I 84 near Joliet, IL" -> "Joliet, IL"; other names are returned unchanged. */
-export function withoutRoad(location: string): string {
-  const m = /^.+?\snear\s+(.+)$/i.exec(location || '')
-  return m ? m[1] : location
 }
 
 /** "City, ST — Note", keeping the city legible when the whole thing is too long. */
@@ -202,8 +190,64 @@ export function remarkText(remark: Pick<LogRemark, 'location' | 'note'>, maxChar
 /** Approximate advance width of one monospace glyph, as a fraction of font size. */
 export const MONO_CHAR_WIDTH = 0.6
 
+/** Remarks at the same place starting within this many minutes share one label. */
+export const REMARK_MERGE_MINUTES = 60
+
+/** One written remark: one or more consecutive duty changes at the same place. */
+export interface RemarkGroup {
+  start_minute: number
+  end_minute: number
+  /** City/state only, one form for the whole sheet (the FMCSA remark needs no road). */
+  location: string
+  /** Activities in time order, e.g. "Post-trip inspection, 10-hour rest". */
+  note: string
+  /** The remarks this label covers; each still gets its own bracket. */
+  members: LogRemark[]
+}
+
+/**
+ * Sort remarks and merge consecutive ones at the same place that start close together,
+ * as a driver would write "Joplin, MO — Post-trip inspection, 10-hour rest" once instead of
+ * squeezing two labels into a few pixels.
+ */
+export function groupRemarks(remarks: readonly LogRemark[]): RemarkGroup[] {
+  const sorted = [...remarks]
+    .filter((rm) => Number.isFinite(rm.start_minute))
+    .sort((a, b) => a.start_minute - b.start_minute || a.end_minute - b.end_minute)
+  const groups: RemarkGroup[] = []
+  for (const rm of sorted) {
+    const location = placeLabel(rm.location, { withRoad: false })
+    const prev = groups[groups.length - 1]
+    const last = prev?.members[prev.members.length - 1]
+    if (prev && last && prev.location === location && rm.start_minute - last.start_minute <= REMARK_MERGE_MINUTES) {
+      prev.members.push(rm)
+      prev.end_minute = Math.max(prev.end_minute, rm.end_minute)
+      const note = shortNote(rm.note.trim())
+      if (prev.members.length === 2) prev.note = shortNote(prev.note)
+      if (note && !prev.note.split(', ').includes(note)) prev.note = prev.note ? `${prev.note}, ${note}` : note
+    } else {
+      groups.push({
+        start_minute: rm.start_minute,
+        end_minute: rm.end_minute,
+        location,
+        note: rm.note.trim(),
+        members: [rm],
+      })
+    }
+  }
+  return groups
+}
+
+/** Paper-log shorthand, used when several activities share one label. */
+export function shortNote(note: string): string {
+  return note
+    .replace(/\b(Pre|Post)-trip inspection\b/gi, '$1-trip')
+    .replace(/\b(\d+)-hour\b/gi, '$1-hr')
+    .replace(/\b(\d+)-minute\b/gi, '$1-min')
+}
+
 export interface RemarkLayout {
-  remark: LogRemark
+  group: RemarkGroup
   /** Bracket start on the ruler. */
   startX: number
   /** Where the rotated label is anchored (may be pushed right of startX). */
@@ -236,10 +280,7 @@ export interface RemarkLayoutOptions {
  * backward pass pulls them back inside the right limit, and each label is then
  * truncated to the room left before the sheet's right/bottom edges.
  */
-export function layoutRemarks(
-  remarks: readonly LogRemark[],
-  opts: RemarkLayoutOptions = {},
-): RemarkLayout[] {
+export function layoutRemarks(remarks: readonly LogRemark[], opts: RemarkLayoutOptions = {}): RemarkLayout[] {
   const fontSize = opts.fontSize ?? 10.5
   const angle = ((opts.angle ?? 45) * Math.PI) / 180
   const sin = Math.sin(angle)
@@ -249,25 +290,23 @@ export function layoutRemarks(
   const minX = GRID.left + 2
   const maxX = GRID.right + 30
 
-  const sorted = [...remarks]
-    .filter((rm) => Number.isFinite(rm.start_minute))
-    .sort((a, b) => a.start_minute - b.start_minute || a.end_minute - b.end_minute)
-  const n = sorted.length
+  const groups = groupRemarks(remarks)
+  const n = groups.length
   if (n === 0) return []
 
   // Shrink the gap if a pathological number of remarks would not otherwise fit.
   const gap = Math.min(lineGap / sin, (maxX - minX) / Math.max(1, n - 1))
 
-  const ideal = sorted.map((rm) => minuteToX(rm.start_minute) + 3)
+  const ideal = groups.map((g) => minuteToX(g.start_minute) + 3)
   const anchors = [...ideal]
   for (let i = 0; i < n; i++) {
     anchors[i] = Math.max(anchors[i], minX, i > 0 ? anchors[i - 1] + gap : -Infinity)
   }
   // Near midnight a label would run off the sheet: let it slide left (with a
   // leader line) far enough to fit, but not absurdly far from its bracket.
-  const labelRun = (rm: LogRemark) =>
-    Math.min(remarkText(rm, Number.POSITIVE_INFINITY).length * fontSize * MONO_CHAR_WIDTH, (REMARKS.bottom - REMARKS.textTop) / sin) * cos
-  const caps = sorted.map((rm, i) => Math.min(maxX, Math.max(REMARKS.rightLimit - labelRun(rm), ideal[i] - 200)))
+  const labelRun = (g: RemarkGroup) =>
+    Math.min(remarkText(g, Number.POSITIVE_INFINITY).length * fontSize * MONO_CHAR_WIDTH, (REMARKS.bottom - REMARKS.textTop) / sin) * cos
+  const caps = groups.map((g, i) => Math.min(maxX, Math.max(REMARKS.rightLimit - labelRun(g), ideal[i] - 200)))
   for (let i = n - 1; i >= 0; i--) {
     anchors[i] = Math.min(anchors[i], caps[i], i < n - 1 ? anchors[i + 1] - gap : Infinity)
   }
@@ -276,29 +315,63 @@ export function layoutRemarks(
   }
 
   const anchorY = REMARKS.textTop
-  return sorted.map((remark, i) => {
+  return groups.map((group, i) => {
     const anchorX = anchors[i]
     const roomX = (REMARKS.rightLimit - anchorX) / cos
     const roomY = (REMARKS.bottom - anchorY) / sin
     const room = Math.min(roomX, roomY)
-    // If "I 84 near Mountain Home, ID — ..." is too long, drop the road prefix first (the
-    // city/state is what the FMCSA remark requires), then shrink, and truncate only as a last resort.
-    const fits = (rm: Pick<LogRemark, 'location' | 'note'>) =>
-      remarkText(rm, Number.POSITIVE_INFINITY).length * fontSize * MONO_CHAR_WIDTH <= room
-    const shown = fits(remark) ? remark : { ...remark, location: withoutRoad(remark.location) }
-    const full = remarkText(shown, Number.POSITIVE_INFINITY)
+    // Shrink first, and truncate only as a last resort.
+    const full = remarkText(group, Number.POSITIVE_INFINITY)
     const size = Math.max(minFontSize, Math.min(fontSize, room / (Math.max(1, full.length) * MONO_CHAR_WIDTH)))
     const maxChars = Math.floor(room / (size * MONO_CHAR_WIDTH))
     return {
-      remark,
-      startX: minuteToX(remark.start_minute),
+      group,
+      startX: minuteToX(group.start_minute),
       anchorX,
       anchorY,
-      text: remarkText(shown, maxChars),
+      text: remarkText(group, maxChars),
       fontSize: Math.round(size * 10) / 10,
       displaced: Math.abs(anchorX - ideal[i]) > 1.5,
     }
   })
+}
+
+/**
+ * Dashed leader from a displaced label's bracket to its anchor. It drops just below the
+ * brackets, runs horizontally above the label strips, then angles into the anchor, so it
+ * never cuts through the label written before it.
+ */
+export function leaderPoints(layout: Pick<RemarkLayout, 'startX' | 'anchorX' | 'anchorY'>): Array<[number, number]> {
+  const y = REMARKS.bracketTop + REMARKS.bracketDepth + 3
+  return [
+    [layout.startX, REMARKS.bracketTop + REMARKS.bracketDepth],
+    [layout.startX, y],
+    [layout.anchorX - 6, y],
+    [layout.anchorX - 1, layout.anchorY - 1],
+  ]
+}
+
+export function leaderPath(layout: Pick<RemarkLayout, 'startX' | 'anchorX' | 'anchorY'>): string {
+  return leaderPoints(layout)
+    .map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${r(x)} ${r(y)}`)
+    .join(' ')
+}
+
+/**
+ * Corners of a rotated label's box (baseline anchor, clockwise angle): from the
+ * descenders to the ascenders, along the text's advance. Used by tests and debug views.
+ */
+export function labelCorners(layout: RemarkLayout, angleDeg = 45): Array<[number, number]> {
+  const a = (angleDeg * Math.PI) / 180
+  const ux = Math.cos(a)
+  const uy = Math.sin(a) // along the text
+  const nx = Math.sin(a)
+  const ny = -Math.cos(a) // "up" from the baseline
+  const len = layout.text.length * layout.fontSize * MONO_CHAR_WIDTH
+  const up = layout.fontSize * 0.75
+  const down = layout.fontSize * 0.25
+  const p = (t: number, h: number): [number, number] => [layout.anchorX + ux * t + nx * h, layout.anchorY + uy * t + ny * h]
+  return [p(0, -down), p(len, -down), p(len, up), p(0, up)]
 }
 
 // ---------- Misc ----------
@@ -321,9 +394,14 @@ export function shortDateLabel(iso: string): string {
 /**
  * 34-hour restart state for the recap: 'completed' when a restart ends on this
  * sheet, 'in-progress' when one runs through midnight, otherwise null.
+ *
+ * A restart that ends exactly at 24:00 has also completed: the cycle resets on this
+ * sheet (A = 0). A sheet in the middle of a restart can never show 0 used, because a
+ * restart is only scheduled when the cycle is nearly spent.
  */
-export function restartState(remarks: readonly LogRemark[]): 'completed' | 'in-progress' | null {
+export function restartState(remarks: readonly LogRemark[], cycleUsed: number): 'completed' | 'in-progress' | null {
   const restarts = remarks.filter((rm) => /34[\s-]*(h|hr|hour)|restart/i.test(rm.note))
   if (restarts.length === 0) return null
-  return restarts.some((rm) => rm.end_minute < MINUTES_PER_DAY) ? 'completed' : 'in-progress'
+  const done = restarts.some((rm) => rm.end_minute < MINUTES_PER_DAY || (rm.end_minute >= MINUTES_PER_DAY && cycleUsed === 0))
+  return done ? 'completed' : 'in-progress'
 }

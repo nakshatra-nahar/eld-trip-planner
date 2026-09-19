@@ -80,6 +80,8 @@ export interface PlaceRef {
   lat: number
   lon: number
   name: string // "City, ST" style label, e.g. "Joliet, IL" or "I 80 near Joliet, IL"
+  city?: string // the "City, ST" part of name, e.g. "Joliet, IL" (always sent by the API)
+  road?: string // highway ref when the place is on one, e.g. "I 80" (omitted otherwise)
 }
 
 export interface TimelineEvent {
@@ -121,7 +123,9 @@ export interface LogRemark {
   start_minute: number // where the bracket/remark starts on this sheet
   end_minute: number // end of the bracketed (non-driving) period on this sheet
   status: DutyStatus
-  location: string // "City, ST"
+  location: string // "City, ST", or "I 80 near City, ST" on a highway (PlaceRef.name)
+  city?: string // PlaceRef.city (always sent by the API)
+  road?: string // PlaceRef.road (omitted when not on a highway)
   note: string // activity, e.g. "Pickup", "Fuel", "30-minute break", "10-hour rest (cont.)"
 }
 
@@ -175,7 +179,7 @@ export interface PlanResponse {
 
 export interface ApiError {
   error: string // human-readable message
-  code: string // e.g. "validation_error", "geocode_failed", "route_not_found", "upstream_unavailable"
+  code: string // "validation_error" | "geocode_failed" | "route_not_found" | "upstream_unavailable" | "not_found" | "internal_error"
   details?: Record<string, string[]>
 }
 

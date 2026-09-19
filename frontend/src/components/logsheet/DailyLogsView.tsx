@@ -3,18 +3,12 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { FileCode, ImageDown, Layers, Printer } from 'lucide-react'
+import { ChevronDown, Download, FileCode, ImageDown, Layers, Printer } from 'lucide-react'
+import { formatDuration } from '../../lib/format'
 import type { DailyLog, DutyStatus, LogHeaderDetails } from '../../types/api'
 import { LogSheet } from './LogSheet'
 import { downloadPng, downloadSvg } from './exporters'
-import {
-  STATUS_LABELS,
-  STATUS_ORDER,
-  formatHours,
-  minutesByStatus,
-  roundedHoursByStatus,
-  shortDateLabel,
-} from './geometry'
+import { STATUS_LABELS, STATUS_ORDER, minutesByStatus, roundedMinutesByStatus, shortDateLabel } from './geometry'
 import './logsheet.css'
 
 export interface DailyLogsViewProps {
@@ -33,6 +27,9 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
   const [printing, setPrinting] = useState(false)
   const [busy, setBusy] = useState<null | 'png'>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  // Phones: show the whole sheet at once (like the paper form) unless the driver zooms in.
+  const [fit, setFit] = useState(true)
+  const menuRef = useRef<HTMLDetailsElement>(null)
   const sheetRefs = useRef(new Map<number, SVGSVGElement>())
   const pillRefs = useRef<(HTMLButtonElement | null)[]>([])
 
@@ -64,6 +61,23 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
     [],
   )
 
+  // Close the download menu on an outside click or Escape.
+  useEffect(() => {
+    const close = (e: Event) => {
+      const menu = menuRef.current
+      if (!menu?.open) return
+      if (e instanceof globalThis.KeyboardEvent ? e.key === 'Escape' : !menu.contains(e.target as Node)) {
+        menu.removeAttribute('open')
+      }
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', close)
+    }
+  }, [])
+
   if (!current) {
     return (
       <section className="ls-view">
@@ -73,11 +87,20 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
   }
 
   const fileBase = `drivers-daily-log-day-${current.day_number}-${current.date}`
-  const exportSvg = () => {
+  const closeMenu = () => menuRef.current?.removeAttribute('open')
+  const exportSvg = async () => {
+    closeMenu()
     const svg = sheetRefs.current.get(index)
-    if (svg) downloadSvg(svg, `${fileBase}.svg`)
+    if (!svg) return
+    setExportError(null)
+    try {
+      await downloadSvg(svg, `${fileBase}.svg`)
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'SVG export failed')
+    }
   }
   const exportPng = async () => {
+    closeMenu()
     const svg = sheetRefs.current.get(index)
     if (!svg) return
     setBusy('png')
@@ -113,7 +136,7 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
     const m = minutesByStatus(lg.segments)
     for (const s of STATUS_ORDER) legendMinutes[s] += m[s]
   }
-  const legendHours = roundedHoursByStatus(legendMinutes)
+  const legendRounded = roundedMinutesByStatus(legendMinutes)
   const legendMiles = legendLogs.reduce((a, lg) => a + lg.total_miles, 0)
 
   const visible = showAll ? logs.map((lg, i) => ({ lg, i })) : [{ lg: current, i: index }]
@@ -150,33 +173,42 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
               type="button"
               className="ls-toggle"
               aria-pressed={showAll}
+              aria-label="Show all days"
+              title="Show every day's sheet"
               onClick={() => setShowAll((v) => !v)}
             >
               <Layers size={16} aria-hidden />
-              <span>Show all</span>
+              <span className="ls-toggle-text">Show all</span>
             </button>
           ) : null}
         </div>
 
         <div className="ls-actions" role="group" aria-label="Print and export">
-          <button type="button" className="ls-btn ls-btn-primary" onClick={() => setPrinting(true)}>
+          <button type="button" className="ls-btn ls-btn-primary" aria-label="Print or save as PDF" onClick={() => setPrinting(true)}>
             <Printer size={16} aria-hidden />
             <span>Print / Save as PDF</span>
           </button>
-          <button type="button" className="ls-btn" onClick={exportSvg} title={`Download day ${current.day_number} as SVG`}>
-            <FileCode size={16} aria-hidden />
-            <span>SVG</span>
-          </button>
-          <button
-            type="button"
-            className="ls-btn"
-            onClick={exportPng}
-            disabled={busy === 'png'}
-            title={`Download day ${current.day_number} as PNG (2x)`}
-          >
-            <ImageDown size={16} aria-hidden />
-            <span>{busy === 'png' ? 'Rendering…' : 'PNG'}</span>
-          </button>
+          <details className="ls-menu" ref={menuRef}>
+            <summary className="ls-btn" aria-label={`Download day ${current.day_number}`}>
+              <Download size={16} aria-hidden />
+              <span>{busy === 'png' ? 'Rendering…' : 'Download'}</span>
+              <ChevronDown size={14} aria-hidden className="ls-menu-chevron" />
+            </summary>
+            <div className="ls-menu-list">
+              <button type="button" className="ls-menu-item" onClick={exportPng} disabled={busy === 'png'}>
+                <ImageDown size={16} aria-hidden />
+                <span>
+                  PNG image<small>Day {current.day_number}, 2x resolution</small>
+                </span>
+              </button>
+              <button type="button" className="ls-menu-item" onClick={exportSvg}>
+                <FileCode size={16} aria-hidden />
+                <span>
+                  SVG vector<small>Day {current.day_number}, scales to any size</small>
+                </span>
+              </button>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -186,7 +218,7 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
           <span key={s} className="ls-legend-item" title={STATUS_LABELS[s]}>
             <span className={`ls-swatch ls-swatch-${s}`} aria-hidden />
             <span className="ls-legend-label">{STATUS_SHORT[s]}</span>
-            <span className="ls-legend-value">{formatHours(legendHours[s])} h</span>
+            <span className="ls-legend-value">{formatDuration(legendRounded[s] / 60)}</span>
           </span>
         ))}
         <span className="ls-legend-item ls-legend-miles">
@@ -200,12 +232,20 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
         </p>
       ) : null}
 
-      <p className="ls-swipe-hint">Swipe sideways to read the full sheet, or download it as a PNG.</p>
+      <div className="ls-zoom" role="group" aria-label="Sheet size">
+        <button type="button" aria-pressed={fit} onClick={() => setFit(true)}>
+          Fit width
+        </button>
+        <button type="button" aria-pressed={!fit} onClick={() => setFit(false)}>
+          Actual size
+        </button>
+        {!fit ? <p className="ls-swipe-hint">Swipe sideways to read the full sheet.</p> : null}
+      </div>
 
-      <div className="ls-sheets">
+      <div className="ls-sheets" data-fit={fit || undefined}>
         {visible.map(({ lg, i }) => (
           <figure key={lg.date} className="ls-sheet" data-selected={i === index || undefined}>
-            <LogSheet ref={setSheetRef(i)} log={lg} header={header} dayCount={count} tripLabel={tripLabel} />
+            <LogSheet ref={setSheetRef(i)} log={lg} header={header} dayCount={count} tripLabel={tripLabel} tint />
           </figure>
         ))}
       </div>

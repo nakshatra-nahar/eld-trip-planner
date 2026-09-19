@@ -14,7 +14,7 @@ import pytest
 from trips import hos, planner_service
 from trips.serializers import PlanRequestSerializer
 from trips.services import routing
-from trips.services.errors import GeocodeFailed, RouteNotFound
+from trips.services.errors import GeocodeFailed, RouteNotFound, UnsupportedRegion
 
 # Key sets of the api.ts interfaces (the JSON contract).
 PLAN_RESPONSE = {"input", "route", "timeline", "stops", "daily_logs", "summary", "assumptions", "warnings"}
@@ -24,14 +24,14 @@ OPTIONS = {"include_inspections", "rest_status", "fuel_stop_minutes"}
 ROUTE_INFO = {"distance_miles", "duration_hours", "geometry", "legs", "provider"}
 ROUTE_LEG = {"from_role", "to_role", "distance_miles", "duration_hours", "geometry", "instructions"}
 INSTRUCTION = {"text", "maneuver", "modifier", "road", "distance_miles", "duration_minutes", "location"}
-PLACE_REF = {"lat", "lon", "name"}
+PLACE_REF = {"lat", "lon", "name", "city"}  # + optional "road"
 TIMELINE_EVENT = {"id", "kind", "status", "label", "start", "end", "duration_hours", "miles", "start_mile",
                   "end_mile", "leg_index", "start_location", "end_location"}
 STOP = {"id", "kind", "status", "label", "start", "end", "duration_hours", "mile_marker", "day_number", "location"}
 DAILY_LOG = {"date", "day_number", "total_miles", "segments", "totals", "remarks", "on_duty_hours",
              "cycle_hours_used", "cycle_hours_available", "from_location", "to_location"}
 LOG_SEGMENT = {"status", "start_minute", "end_minute"}
-LOG_REMARK = {"start_minute", "end_minute", "status", "location", "note"}
+LOG_REMARK = {"start_minute", "end_minute", "status", "location", "city", "note"}  # + optional "road"
 SUMMARY = {"total_miles", "total_driving_hours", "total_on_duty_hours", "trip_duration_hours", "start_time",
            "end_time", "num_days", "num_fuel_stops", "num_breaks", "num_rests", "num_restarts",
            "cycle_hours_used_at_end", "cycle_hours_available_at_end"}
@@ -54,14 +54,14 @@ def assert_plan_response_contract(body: dict) -> None:
             assert set(ins) == INSTRUCTION
     for ev in body["timeline"]:
         assert set(ev) == TIMELINE_EVENT
-        assert set(ev["start_location"]) == PLACE_REF == set(ev["end_location"])
+        assert set(ev["start_location"]) - {"road"} == PLACE_REF == set(ev["end_location"]) - {"road"}
     for stop in body["stops"]:
         assert set(stop) == STOP and stop["kind"] != "drive"
     for log in body["daily_logs"]:
         assert set(log) == DAILY_LOG
         assert set(log["totals"]) == {"OFF", "SB", "D", "ON"}
         assert all(set(s) == LOG_SEGMENT for s in log["segments"])
-        assert all(set(r) == LOG_REMARK for r in log["remarks"])
+        assert all(set(r) - {"road"} == LOG_REMARK for r in log["remarks"])
     assert set(body["summary"]) == SUMMARY
     assert all(isinstance(s, str) for s in body["assumptions"] + body["warnings"])
 
@@ -191,3 +191,12 @@ def test_real_engine_end_to_end_contract(offline):
     for log in body["daily_logs"]:
         assert log["segments"][0]["start_minute"] == 0 and log["segments"][-1]["end_minute"] == 1440
         assert sum(log["totals"].values()) == pytest.approx(24.0, abs=0.01)
+
+
+@pytest.mark.parametrize("where", [(20.6597, -103.3496), (48.857, 2.352)])
+def test_coordinates_outside_us_ca_are_rejected(offline, where):
+    lat, lon = where
+    with pytest.raises(UnsupportedRegion) as err:
+        planner_service.plan_trip(validated(pickup_location={"lat": lat, "lon": lon}))
+    assert (err.value.status, err.value.code) == (422, "unsupported_region")
+    assert "pickup_location" in err.value.details

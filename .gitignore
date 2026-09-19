@@ -17,3 +17,7 @@ frontend/dist/
 .vercel
 test-results/
 playwright-report/
+# Editors / logs
+.idea/
+.vscode/
+*.log

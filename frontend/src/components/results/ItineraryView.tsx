@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react'
 import { useMemo } from 'react'
 import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND } from '../../lib/duty'
 import { cn } from '../../lib/cn'
-import { formatClock, formatDay, formatDayLong, formatDuration, formatHours, formatMiles } from '../../lib/format'
+import { formatClock, formatDay, formatDayLong, formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { DailyLog, TimelineEvent } from '../../types/api'
 import { StatusChip } from '../ui'
 
@@ -37,7 +37,7 @@ export function ItineraryView({ timeline, dailyLogs, selectedId, onSelect }: Iti
           className="grid gap-4 lg:grid-cols-[272px_minmax(0,1fr)] lg:gap-10"
         >
           <DayHeader date={date} log={log} />
-          <ol className="relative max-w-3xl">
+          <ol className="relative max-w-6xl">
             {events.map((e, i) => (
               <ItineraryRow
                 key={e.id}
@@ -59,7 +59,7 @@ function DayHeader({ date, log }: { date: string; log?: DailyLog }) {
   return (
     <header className="self-start rounded-xl bg-ink-50 p-4 ring-1 ring-ink-150 ring-inset lg:sticky lg:top-[80px]">
       <h3 id={`day-${date}`} className="flex items-baseline gap-2">
-        <span className="font-display text-lg font-extrabold tracking-tight text-hw-600">
+        <span className="font-display text-lg font-extrabold tracking-tight text-hw-700">
           Day {log?.day_number ?? '–'}
         </span>
         <span className="text-sm font-semibold text-ink-900">{formatDayLong(date).replace(/, \d{4}$/, '')}</span>
@@ -105,7 +105,7 @@ function DayHeader({ date, log }: { date: string; log?: DailyLog }) {
               <span className="font-semibold text-ink-900">{formatMiles(log.total_miles)}</span> driven
             </span>
             <span>
-              cycle <span className="font-semibold text-ink-900">{formatHours(log.cycle_hours_used)}</span>/70 h
+              cycle <span className="font-semibold text-ink-900">{formatDuration(log.cycle_hours_used)}</span> of 70h
             </span>
           </p>
         </>
@@ -165,7 +165,9 @@ function ItineraryRow({
         onClick={onSelect}
         aria-pressed={selected}
         className={cn(
-          'group mb-1.5 min-h-14 rounded-xl px-3 py-2.5 text-left transition-colors',
+          // On wide screens the row reads as a table line (what · where · miles) instead of a
+          // narrow stack, so the timeline uses the width next to the day card.
+          'group mb-1.5 min-h-14 w-full rounded-xl px-3 py-2.5 text-left transition-colors xl:grid xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1.35fr)_minmax(0,0.8fr)] xl:items-center xl:gap-5',
           selected ? 'bg-hw-50 ring-1 ring-hw-200' : 'hover:bg-ink-50',
         )}
       >
@@ -174,21 +176,21 @@ function ItineraryRow({
           <StatusChip status={e.status} />
           <span className="tabular font-mono text-xs text-ink-500">{formatDuration(e.duration_hours)}</span>
         </div>
-        <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] text-ink-600">
+        <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] text-ink-600 xl:mt-0">
           {drive ? (
             <>
-              <span className="truncate">{e.start_location.name}</span>
+              <span className="truncate">{placeLabel(e.start_location.name)}</span>
               <ArrowRight className="size-3 shrink-0 text-ink-400" aria-label="to" />
-              <span className="truncate">{e.end_location.name}</span>
+              <span className="truncate">{placeLabel(e.end_location.name)}</span>
             </>
           ) : (
-            <span className="truncate">{e.start_location.name}</span>
+            <span className="truncate">{placeLabel(e.start_location.name)}</span>
           )}
         </p>
-        <p className="tabular mt-0.5 font-mono text-[11px] text-ink-400">
+        <p className="tabular mt-0.5 font-mono text-[11px] text-ink-400 xl:mt-0 xl:text-right">
           {drive ? (
             <>
-              <span className="font-semibold text-duty-d">{formatMiles(e.miles)}</span> · mile{' '}
+              <span className="font-semibold text-duty-d-ink">{formatMiles(e.miles)}</span> · mile{' '}
               {formatMiles(e.start_mile, { unit: false })}–{formatMiles(e.end_mile, { unit: false })}
             </>
           ) : (

@@ -1,6 +1,9 @@
 import { isValidWallTime } from '../../lib/format'
 import type { PlannerErrors, PlannerValues } from './types'
 
+/** Same bounds as the backend serializer (PlanOptionsSerializer.fuel_stop_minutes). */
+export const FUEL_MINUTES = { min: 5, max: 240 } as const
+
 export function validatePlanner(values: PlannerValues): PlannerErrors {
   const errors: PlannerErrors = {}
   const need = (key: 'current' | 'pickup' | 'dropoff', what: string) => {
@@ -24,13 +27,19 @@ export function validatePlanner(values: PlannerValues): PlannerErrors {
   if (!isValidWallTime(values.startTime)) errors.startTime = 'Choose a valid start date and time.'
 
   const fuel = values.options.fuel_stop_minutes
-  if (!Number.isFinite(fuel) || fuel < 5 || fuel > 180) errors.fuel = 'Fuel stop must be 5-180 minutes.'
+  if (!Number.isInteger(fuel) || fuel < FUEL_MINUTES.min || fuel > FUEL_MINUTES.max) {
+    errors.fuel = `Fuel stop must be a whole number of minutes, ${FUEL_MINUTES.min}-${FUEL_MINUTES.max}.`
+  }
 
   return errors
 }
 
-/** Maps backend validation details (keys from PlanRequest) onto form fields. */
-export function mapServerDetails(details?: Record<string, string[]>): PlannerErrors {
+/**
+ * Maps backend error details (keys from PlanRequest, nested ones flattened as
+ * "options.fuel_stop_minutes") onto form fields. `override` replaces the server's wording,
+ * e.g. for geocoding failures where the field itself is the message.
+ */
+export function mapServerDetails(details?: Record<string, string[]>, override?: string): PlannerErrors {
   if (!details) return {}
   const map: Record<string, keyof PlannerErrors> = {
     current_location: 'current',
@@ -39,11 +48,12 @@ export function mapServerDetails(details?: Record<string, string[]>): PlannerErr
     current_cycle_used_hours: 'cycleUsed',
     start_time: 'startTime',
     fuel_stop_minutes: 'fuel',
+    'options.fuel_stop_minutes': 'fuel',
   }
   const errors: PlannerErrors = {}
   for (const [key, messages] of Object.entries(details)) {
     const field = map[key] ?? Object.entries(map).find(([k]) => key.startsWith(k))?.[1]
-    if (field && messages.length) errors[field] = messages.join(' ')
+    if (field && messages.length) errors[field] = override ?? messages.join(' ')
   }
   return errors
 }

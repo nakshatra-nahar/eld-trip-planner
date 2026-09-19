@@ -1,6 +1,6 @@
 export { Badge, StatusChip } from './Badge'
 export { Button } from './Button'
-export { Card, SectionHeading } from './Card'
+export { Card } from './Card'
 export { Disclosure } from './Disclosure'
 export { Field, inputClass } from './Input'
 export { SegmentedControl } from './SegmentedControl'

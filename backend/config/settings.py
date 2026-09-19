@@ -2,8 +2,9 @@
 
 Configuration comes from the environment, with development defaults:
 
-    DJANGO_SECRET_KEY      secret key (a fixed insecure key is used in DEBUG)
-    DJANGO_DEBUG           "1"/"true" to enable debug (default: on locally, off on Vercel)
+    DJANGO_SECRET_KEY      secret key; required when DEBUG is off (a fixed dev key is used in DEBUG)
+    DJANGO_DEBUG           "1"/"true" to enable debug (default: off; manage.py turns it on
+                           for local commands such as runserver)
     ALLOWED_HOSTS          comma-separated hosts (default: localhost + .vercel.app)
     CORS_ALLOWED_ORIGINS   comma-separated origins (default: the Vite dev server)
     CORS_ALLOWED_ORIGIN_REGEXES  optional comma-separated regexes (e.g. Vercel previews)
@@ -15,6 +16,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -33,12 +36,16 @@ def env_list(name: str, default: list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-ON_VERCEL = bool(os.environ.get("VERCEL"))
-DEBUG = env_bool("DJANGO_DEBUG", default=not ON_VERCEL)
+# Off unless asked for, so any deployment (Vercel, Render, Docker) is safe by default.
+DEBUG = env_bool("DJANGO_DEBUG", default=False)
 
-# The API keeps no sessions or signed data, so the key protects little; still, set
-# DJANGO_SECRET_KEY in production.
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or "django-insecure-dev-only-eld-trip-planner-key-change-me"
+# The API keeps no sessions or signed data, so the key protects little, but a deployment
+# must still not run on a key that is published in the repository.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or (
+    "django-insecure-dev-only-eld-trip-planner-key-change-me" if DEBUG else ""
+)
+if not SECRET_KEY:
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY is required when DEBUG is off (set DJANGO_DEBUG=1 for local use).")
 
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", ["localhost", "127.0.0.1", "[::1]", ".vercel.app"])
 
@@ -93,6 +100,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
     "EXCEPTION_HANDLER": "trips.views.api_exception_handler",
+    # Only views that set ``throttle_scope`` are limited: the geocode autocomplete proxy.
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {"geocode": os.environ.get("GEOCODE_RATE", "60/min")},
 }
 
 PLAN_TIME_BUDGET_SECONDS = float(os.environ.get("PLAN_TIME_BUDGET_SECONDS", "25"))
@@ -111,6 +121,15 @@ X_FRAME_OPTIONS = "DENY"
 if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SESSION_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_SSL_REDIRECT = False  # the platform edge (Vercel) terminates TLS and redirects HTTP
+    SILENCED_SYSTEM_CHECKS = [
+        # No CSRF middleware: the API is stateless JSON with no cookies or session auth,
+        # so there is no ambient credential for a cross-site request to ride on.
+        "security.W003",
+        # SSL redirect happens at the edge, before Django (see SECURE_SSL_REDIRECT).
+        "security.W008",
+    ]
 
 # ---------------------------------------------------------------- logging
 

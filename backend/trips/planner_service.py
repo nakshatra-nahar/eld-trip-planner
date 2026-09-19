@@ -13,8 +13,8 @@ from datetime import datetime
 from typing import Any
 
 from trips import hos
-from trips.services.errors import GeocodeFailed
-from trips.services.geocoding import geocode_one
+from trips.services.errors import GeocodeFailed, UnsupportedRegion
+from trips.services.geocoding import geocode_one, reverse
 from trips.services.geometry import round_coords, simplify_many
 from trips.services.http import Deadline
 from trips.services.instructions import build_instructions
@@ -37,6 +37,11 @@ def _resolve_location(role: str, loc: dict[str, Any], deadline: Deadline) -> dic
     label = (loc.get("label") or "").strip()
     if loc.get("lat") is not None and loc.get("lon") is not None:
         lat, lon = float(loc["lat"]), float(loc["lon"])
+        if reverse(lat, lon) is None:  # no US/CA place within REVERSE_MAX_MILES
+            raise UnsupportedRegion(
+                "Locations must be in the United States or Canada.",
+                details={FIELDS[role]: ["This point is outside the United States and Canada."]},
+            )
         return {"label": label or place_namer(lat, lon, None), "lat": round(lat, 6), "lon": round(lon, 6)}
 
     query = loc["query"]
@@ -67,7 +72,7 @@ def _route_payload(route: RouteResult, resolved: dict[str, dict[str, Any]]) -> d
         full.extend(line if i == 0 else line[1:])  # legs share their waypoint vertex
 
     legs = []
-    for i, (leg, line) in enumerate(zip(route.legs, simplified)):
+    for i, (leg, line) in enumerate(zip(route.legs, simplified, strict=True)):
         to_role = ROLES[i + 1]
         arrive = f"{to_role} ({resolved[to_role]['label']})"
         legs.append(
@@ -77,7 +82,12 @@ def _route_payload(route: RouteResult, resolved: dict[str, dict[str, Any]]) -> d
                 "distance_miles": round(leg.distance_miles, 1),
                 "duration_hours": round(leg.duration_hours, 2),
                 "geometry": round_coords(line),
-                "instructions": build_instructions(leg.steps, arrive_label=arrive),
+                # A (near) zero-length leg (current == pickup) has nothing to follow.
+                "instructions": (
+                    build_instructions(leg.steps, arrive_label=arrive, total_minutes=leg.duration_hours * 60)
+                    if leg.distance_miles >= ZERO_LEG_MILES
+                    else []
+                ),
             }
         )
     return {
@@ -91,7 +101,7 @@ def _route_payload(route: RouteResult, resolved: dict[str, dict[str, Any]]) -> d
 
 def _routing_warnings(route: RouteResult) -> list[str]:
     warnings = []
-    for role, miles in zip(ROLES, route.snap_miles):
+    for role, miles in zip(ROLES, route.snap_miles, strict=False):  # snap_miles may be empty
         if miles >= SNAP_WARNING_MILES:
             warnings.append(
                 f"The {role} location is {miles:.1f} mi from the nearest drivable road; the route starts/ends there."

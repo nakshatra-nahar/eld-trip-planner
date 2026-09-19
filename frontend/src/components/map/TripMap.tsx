@@ -12,7 +12,7 @@ import MapGL, {
   ScaleControl,
   Source,
 } from 'react-map-gl/maplibre'
-import type { StyleSpecification } from 'maplibre-gl'
+import type { Offset as PopupOffset, StyleSpecification } from 'maplibre-gl'
 import type { LngLat, PlanResponse } from '../../types/api'
 import { loadMaplibre } from './maplibre'
 import { loadMapStyle } from './mapStyle'
@@ -62,6 +62,19 @@ const ROUTE_LEG1: LayerProps = {
   },
 }
 
+// Endpoint pins are 34x44 and anchored at their tip, so the popup clears the pin's head.
+const PIN_POPUP_OFFSET: PopupOffset = {
+  top: [0, 0],
+  'top-left': [0, 0],
+  'top-right': [0, 0],
+  bottom: [0, -46],
+  'bottom-left': [0, -46],
+  'bottom-right': [0, -46],
+  left: [18, -22],
+  right: [-18, -22],
+  center: [0, -22],
+}
+
 export interface PreviewPoint {
   role: 'current' | 'pickup' | 'dropoff'
   lngLat: LngLat
@@ -96,6 +109,7 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
   const [hovered, setHovered] = useState<string | null>(null)
   const [pinned, setPinned] = useState<string | null>(null)
   const narrow = useIsNarrow()
+  const [legendOpen, setLegendOpen] = useState(() => !window.matchMedia('(max-width: 640px)').matches)
 
   useEffect(() => {
     let cancelled = false
@@ -119,6 +133,9 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
     (bounds: Bounds | null, duration = 900) => {
       const map = mapRef.current
       if (!map || !bounds) return
+      // A hidden or collapsed container cannot fit the padded bounds (MapLibre warns and bails).
+      const el = map.getContainer()
+      if (el.clientWidth <= padding.left + padding.right || el.clientHeight <= padding.top + padding.bottom) return
       map.fitBounds(bounds, { padding, duration, maxZoom: 11 })
     },
     [padding],
@@ -158,11 +175,26 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
 
   function selectPlace(place: MapPlace) {
     setPinned(place.key)
+    // On phones the legend would cover the popup: fold it away while a place is open.
+    if (narrow) setLegendOpen(false)
     onSelectStop(place.stops[0]?.id ?? null)
   }
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#eef0f3]">
+      {/* Map controls come first in the DOM so they are first in tab order (they sit top-left),
+          and stack above markers (z 1-3) but below an open popup (z 5). */}
+      {plan && (
+        <button
+          type="button"
+          onClick={() => fit(routeBounds)}
+          className="absolute top-2.5 left-2.5 z-[4] inline-flex h-9 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[13px] font-medium text-ink-800 shadow-card ring-1 ring-ink-900/10 hover:bg-ink-50"
+        >
+          <Maximize2 className="size-3.5" aria-hidden /> Fit route
+        </button>
+      )}
+      {plan && <MapLegend plan={plan} open={legendOpen} onToggle={() => setLegendOpen((o) => !o)} />}
+
       {mapStyle && (
         <MapGL
           ref={mapRef}
@@ -232,8 +264,8 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
             <Popup
               longitude={popupPlace.lngLat[0]}
               latitude={popupPlace.lngLat[1]}
-              anchor="bottom"
-              offset={popupPlace.role ? 46 : 20}
+              // No fixed anchor: MapLibre flips the popup to whichever side fits inside the map.
+              offset={popupPlace.role ? PIN_POPUP_OFFSET : 20}
               closeButton={false}
               closeOnClick={false}
               maxWidth="300px"
@@ -243,18 +275,6 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
             </Popup>
           )}
         </MapGL>
-      )}
-
-      {plan && <MapLegend plan={plan} />}
-
-      {plan && (
-        <button
-          type="button"
-          onClick={() => fit(routeBounds)}
-          className="absolute top-2.5 left-2.5 inline-flex h-9 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[13px] font-medium text-ink-800 shadow-card ring-1 ring-ink-900/10 hover:bg-ink-50"
-        >
-          <Maximize2 className="size-3.5" aria-hidden /> Fit route
-        </button>
       )}
 
       {!plan && !loading && preview.length === 0 && (

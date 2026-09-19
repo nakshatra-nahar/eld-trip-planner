@@ -33,8 +33,8 @@ def step(type_, modifier=None, name="", ref=None, distance=100.0, duration=10.0,
         (step("arrive", "right"), "Arrive at your destination, on the right"),
         (step("arrive"), "Arrive at your destination"),
         (step("turn", "left", name="Elm St"), "Turn left onto Elm St"),
-        (step("turn", "sharp right", name="Elm St"), "Turn sharp right onto Elm St"),
-        (step("turn", "slight left"), "Turn slight left"),
+        (step("turn", "sharp right", name="Elm St"), "Make a sharp right onto Elm St"),
+        (step("turn", "slight left"), "Bear left"),
         (step("turn", "straight", name="Elm St"), "Go straight onto Elm St"),
         (step("turn", "uturn"), "Make a U-turn"),
         (step("new name", "straight", name="Oak Ave"), "Continue onto Oak Ave"),
@@ -142,7 +142,8 @@ def test_instruction_contract_keys_and_real_fixtures():
     keys = {"text", "maneuver", "modifier", "road", "distance_miles", "duration_minutes", "location"}
     for name in ("osrm_carmel_roundabouts.json", "osrm_chicago_stlouis_dallas.json.gz"):
         path = FIXTURES / name
-        data = json.loads((gzip.open(path) if name.endswith(".gz") else open(path)).read())
+        with gzip.open(path) if name.endswith(".gz") else path.open("rb") as fh:
+            data = json.loads(fh.read())
         for leg in data["routes"][0]["legs"]:
             out = build_instructions(leg["steps"], "dropoff")
             assert out[0]["maneuver"] == "depart" and out[-1]["maneuver"] == "arrive"
@@ -157,3 +158,13 @@ def test_instruction_contract_keys_and_real_fixtures():
     texts = [i["text"] for leg in carmel["routes"][0]["legs"] for i in build_instructions(leg["steps"])]
     assert not any(t.startswith("Exit the roundabout") for t in texts)
     assert "Enter the roundabout and take the third exit onto South Richland Avenue" in texts
+
+
+def test_step_minutes_scale_to_leg_total():
+    steps = [
+        {"maneuver": {"type": "depart", "bearing_after": 0}, "name": "A St", "distance": 1000, "duration": 60},
+        {"maneuver": {"type": "turn", "modifier": "left"}, "name": "B St", "distance": 3000, "duration": 180},
+        {"maneuver": {"type": "arrive"}, "name": "B St", "distance": 0, "duration": 0},
+    ]
+    out = build_instructions(steps, total_minutes=8.0)
+    assert sum(i["duration_minutes"] for i in out) == pytest.approx(8.0, abs=0.1)

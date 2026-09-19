@@ -15,8 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-METERS_PER_MILE = 1609.344
-TRUCK_MAX_MPS = 65 * METERS_PER_MILE / 3600  # 65 mph cap, as in the HOS profile
+from .units import METERS_PER_MILE, TRUCK_MAX_MPS
 
 _DIRECTIONS = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"]
 _ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
@@ -85,6 +84,10 @@ def _turn_phrase(modifier: str) -> str:
         return "Make a U-turn"
     if modifier in ("straight", ""):
         return "Go straight"
+    if modifier.startswith("slight "):
+        return f"Bear {modifier.split()[1]}"
+    if modifier.startswith("sharp "):
+        return f"Make a sharp {modifier.split()[1]}"
     return f"Turn {modifier}"
 
 
@@ -202,10 +205,14 @@ _ROUNDABOUT_TYPES = {"roundabout", "rotary", "roundabout turn"}
 _EXIT_TYPES = {"exit roundabout", "exit rotary"}
 
 
-def build_instructions(steps: list[dict[str, Any]], arrive_label: str | None = None) -> list[dict[str, Any]]:
+def build_instructions(
+    steps: list[dict[str, Any]], arrive_label: str | None = None, total_minutes: float | None = None
+) -> list[dict[str, Any]]:
     """Turn one OSRM leg's steps into ``Instruction`` dicts (see frontend api.ts).
 
     ``arrive_label`` names the leg's destination in the final "Arrive at ..." line.
+    ``total_minutes`` (the leg's truck-adjusted driving time) rescales the per-step
+    minutes so they add up to the leg duration shown in the Directions header.
     """
     out: list[dict[str, Any]] = []
     for step in steps:
@@ -246,8 +253,10 @@ def build_instructions(steps: list[dict[str, Any]], arrive_label: str | None = N
                 "_last": step,  # latest step folded into it (the road we are on now)
             }
         )
+    step_seconds = sum(ins["_s"] for ins in out)
+    scale = total_minutes * 60.0 / step_seconds if total_minutes is not None and step_seconds > 0 else 1.0
     for ins in out:
         del ins["_step"], ins["_last"]
         ins["distance_miles"] = round(ins.pop("_m") / METERS_PER_MILE, 2)
-        ins["duration_minutes"] = round(ins.pop("_s") / 60.0, 1)
+        ins["duration_minutes"] = round(ins.pop("_s") * scale / 60.0, 1)
     return out

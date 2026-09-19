@@ -5,7 +5,7 @@ from __future__ import annotations
 import heapq
 import math
 
-LonLat = tuple[float, float]
+from trips.hos.profile import LonLat
 
 
 def _perp_dist(p: LonLat, a: LonLat, b: LonLat, kx: float) -> float:

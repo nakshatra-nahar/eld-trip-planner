@@ -24,7 +24,7 @@ export function EmptyState({ onLoadSample }: { onLoadSample: () => void }) {
     <Card className="overflow-hidden">
       <div className="grid gap-6 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
         <div>
-          <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-600 uppercase">How it works</p>
+          <p className="text-[11px] font-semibold tracking-[0.14em] text-hw-700 uppercase">How it works</p>
           <h2 className="mt-1 max-w-xl font-display text-2xl leading-tight font-extrabold tracking-tight text-ink-900">
             From three addresses to a legal, logged trip in one click.
           </h2>

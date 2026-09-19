@@ -8,8 +8,9 @@ import requests
 from trips.hos.profile import LegProfile
 from trips.services import routing
 from trips.services.errors import RouteNotFound, UpstreamUnavailable
-from trips.services.routing import METERS_PER_MILE, parse_route
-
+from trips.services.http import Deadline
+from trips.services.routing import parse_route
+from trips.services.units import METERS_PER_MILE
 
 WAYPOINTS = [(-87.6298, 41.8781), (-90.1994, 38.6270), (-96.7970, 32.7767)]
 
@@ -94,11 +95,11 @@ def test_fetch_route_success_sends_expected_request(use, fake_response, chicago_
         "-87.629800,41.878100;-90.199400,38.627000;-96.797000,32.776700"
     )
     assert call["params"] == {"overview": "full", "geometries": "geojson", "steps": "true", "annotations": "distance,duration"}
-    assert call["timeout"] == 15.0
+    assert call["timeout"] == (routing.CONNECT_TIMEOUT_S, 15.0)
 
 
 def test_fetch_route_retries_then_fails_over(use, fake_response, chicago_dallas):
-    fake = use(requests.Timeout("slow"), fake_response(503), fake_response(200, chicago_dallas))
+    fake = use(requests.ConnectionError("reset"), fake_response(503), fake_response(200, chicago_dallas))
     result = routing.fetch_route(WAYPOINTS)
     assert result.provider == "OSRM (routing.openstreetmap.de)"
     assert [c["url"].split("/route/")[0] for c in fake.calls] == [
@@ -106,6 +107,20 @@ def test_fetch_route_retries_then_fails_over(use, fake_response, chicago_dallas)
         "https://router.project-osrm.org",
         "https://routing.openstreetmap.de/routed-car",
     ]
+
+
+def test_fetch_route_timeout_fails_over_without_retry(use, fake_response, chicago_dallas):
+    """A hung primary must not eat the whole budget: one timeout moves on to the mirror."""
+    fake = use(requests.ReadTimeout("hung"), fake_response(200, chicago_dallas))
+    result = routing.fetch_route(WAYPOINTS, Deadline(25))
+    assert result.provider == "OSRM (routing.openstreetmap.de)"
+    assert [c["url"].split("/route/")[0] for c in fake.calls] == [
+        "https://router.project-osrm.org",
+        "https://routing.openstreetmap.de/routed-car",
+    ]
+    # The primary's read timeout leaves at least half the budget for the mirror.
+    connect, read = fake.calls[0]["timeout"]
+    assert connect == routing.CONNECT_TIMEOUT_S and read <= 12.5
 
 
 def test_fetch_route_all_hosts_down(use):

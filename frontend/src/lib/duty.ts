@@ -61,7 +61,7 @@ export const DUTY_STATUS: Record<DutyStatus, StatusMeta> = {
     line: 4,
     color: 'var(--color-duty-on)',
     soft: 'var(--color-duty-on-soft)',
-    chip: 'bg-duty-on-soft text-[#b45309] ring-duty-on/25',
+    chip: 'bg-duty-on-soft text-[#92400e] ring-duty-on/25',
     dot: 'bg-duty-on',
   },
 }
