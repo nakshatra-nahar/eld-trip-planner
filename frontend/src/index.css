@@ -31,6 +31,7 @@
   --color-hw-400: #f98a35;
   --color-hw-500: #ef6c11;
   --color-hw-600: #d4550a;
+  --color-hw-650: #bf4b0a; /* accent fill for white text: 4.97:1 (AA); hw-700 hover is 6.13:1 */
   --color-hw-700: #a9400c;
 
   --color-duty-off: #64748b;

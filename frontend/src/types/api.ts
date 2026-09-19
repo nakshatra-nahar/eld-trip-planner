@@ -27,7 +27,7 @@ export interface LocationInput {
 }
 
 export interface PlanOptions {
-  include_inspections: boolean // 30-min pre-trip at each duty-period start, 15-min post-trip before each rest and at trip end
+  include_inspections: boolean // 30-min pre-trip at each duty-period start, 15-min post-trip before each rest and at trip end (API default false: not in the brief)
   rest_status: 'SB' | 'OFF' // duty status for 10-hour rests (34-hour restarts are always OFF)
   fuel_stop_minutes: number // on-duty minutes per fuel stop (default 30)
 }
@@ -74,7 +74,7 @@ export interface RouteInfo {
   geometry: LngLat[] // full route, simplified for display
   legs: RouteLeg[] // always 2 legs: current->pickup, pickup->dropoff (leg 0 may be ~0 miles)
   provider: string // e.g. "Valhalla truck (valhalla1.openstreetmap.de)" or "OSRM (router.project-osrm.org)"
-  truck_routing: boolean // true when every leg was routed with a truck profile (false = car-network fallback)
+  truck_routing: boolean // true when every leg was routed with a truck profile (false = car-network fallback, also used when the truck route detours badly; see warnings)
 }
 
 export interface PlaceRef {

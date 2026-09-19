@@ -45,7 +45,8 @@ class LocationInputSerializer(serializers.Serializer):
 
 
 class PlanOptionsSerializer(serializers.Serializer):
-    include_inspections = serializers.BooleanField(required=False, default=True)
+    # Off by default: the brief lists only pickup, drop-off and fuel as time costs.
+    include_inspections = serializers.BooleanField(required=False, default=False)
     rest_status = serializers.ChoiceField(choices=["SB", "OFF"], required=False, default="SB")
     fuel_stop_minutes = serializers.IntegerField(required=False, default=30, min_value=5, max_value=240)
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDuration, formatHoursClock, formatMinutesClock, formatShortDateTime, placeLabel } from './format'
+import { formatDuration, formatHoursClock, formatMinutesClock, formatShortDateTime, nextMorning, placeLabel } from './format'
 
 describe('formatDuration', () => {
   it.each([
@@ -38,4 +38,20 @@ describe('placeLabel', () => {
 
 describe('formatShortDateTime', () => {
   it('drops the weekday so it fits a narrow card', () => expect(formatShortDateTime('2026-09-21T06:00')).toBe('Sep 21, 06:00'))
+})
+
+describe('nextMorning', () => {
+  it('is today at 08:00 while that is still ahead', () => {
+    expect(nextMorning(8, new Date(2026, 8, 19, 6, 30))).toBe('2026-09-19T08:00')
+  })
+  it('rolls to tomorrow at or after 08:00, so evening testing never starts an overnight drive', () => {
+    expect(nextMorning(8, new Date(2026, 8, 19, 8, 0))).toBe('2026-09-20T08:00')
+    expect(nextMorning(8, new Date(2026, 8, 19, 21, 39))).toBe('2026-09-20T08:00')
+  })
+  it('crosses month and year ends', () => {
+    expect(nextMorning(8, new Date(2026, 11, 31, 22, 0))).toBe('2027-01-01T08:00')
+  })
+  it('takes another hour', () => {
+    expect(nextMorning(6, new Date(2026, 8, 19, 5, 59))).toBe('2026-09-19T06:00')
+  })
 })

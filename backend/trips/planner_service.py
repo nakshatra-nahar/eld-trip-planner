@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,7 +23,8 @@ from trips.services.geocoding import geocode_one, reverse
 from trips.services.geometry import round_coords, simplify_many
 from trips.services.http import Deadline
 from trips.services.instructions import build_instructions
-from trips.services.places import place_namer, timezone_at
+from trips.services.places import nearest_place, place_namer, timezone_at
+from trips.services.regions import CA_ABBREVS
 from trips.services.routing import RoutedLeg, RouteResult
 from trips.services.valhalla import build_instructions as build_truck_instructions
 from trips.services.valhalla import route_trip
@@ -112,7 +113,14 @@ def _route_payload(route: RouteResult, resolved: dict[str, dict[str, Any]]) -> d
 
 def _routing_warnings(route: RouteResult) -> list[str]:
     warnings = []
-    if not route.truck_routing:
+    if route.detour_miles > 0:
+        miles = sum(leg.distance_miles for leg in route.legs)
+        warnings.append(
+            f"Truck routing detoured {route.detour_miles:,.0f} mi (e.g. around a border crossing OpenStreetMap "
+            f"marks truck-restricted), so this route follows the car road network ({miles:,.0f} mi) with a "
+            "65 mph cap; check it for truck restrictions."
+        )
+    elif not route.truck_routing:
         warnings.append(
             "Truck routing was unavailable, so this route follows the car road network (OSRM) with a 65 mph cap; "
             "check it for truck restrictions."
@@ -127,6 +135,33 @@ def _routing_warnings(route: RouteResult) -> list[str]:
     if len(route.legs) > 1 and route.legs[1].distance_miles < ZERO_LEG_MILES:
         warnings.append("Pickup and dropoff are at the same place, so the loaded leg has no driving.")
     return warnings
+
+
+def _canada_warning(resolved: dict[str, dict[str, Any]]) -> list[str]:
+    """A note when an input location is in Canada: the plan still follows US FMCSA rules."""
+    found = [nearest_place(resolved[r]["lat"], resolved[r]["lon"], prefer_populous=False) for r in ROLES]
+    if not any(f is not None and f[1] in CA_ABBREVS for f in found):
+        return []
+    return [
+        "Part of this trip is in Canada. Hours of service are planned under US FMCSA rules (70 h/8 days) "
+        "for the whole trip, as the brief specifies, not under Canada's own rules."
+    ]
+
+
+def _dst_warning(start: datetime, end: datetime, home: ZoneInfo) -> list[str]:
+    """A note when the trip crosses a daylight-saving change in the home-terminal zone, since
+    the engine's naive home-terminal clock does not shift at it."""
+    if start.replace(tzinfo=home).utcoffset() == end.replace(tzinfo=home).utcoffset():
+        return []
+    day = start.replace(hour=0, minute=0)
+    while day < end and (day + timedelta(days=1)).replace(tzinfo=home).utcoffset() == day.replace(
+        tzinfo=home
+    ).utcoffset():
+        day += timedelta(days=1)
+    return [
+        f"This trip crosses a daylight-saving change on {day:%b} {day.day}; times after it are shown on "
+        "the pre-change clock."
+    ]
 
 
 def _local(value: str, home: ZoneInfo, zone: ZoneInfo) -> tuple[str, str]:
@@ -202,7 +237,10 @@ def plan_trip(data: dict[str, Any], budget_s: float = DEFAULT_BUDGET_S) -> dict[
         "daily_logs": plan["daily_logs"],
         "summary": plan["summary"],
         "assumptions": list(plan.get("assumptions") or []),
-        "warnings": _routing_warnings(route) + list(plan.get("warnings") or []),
+        "warnings": _routing_warnings(route)
+        + _canada_warning(resolved)
+        + _dst_warning(start_time, datetime.strptime(plan["summary"]["end_time"], TIME_FORMAT), home)
+        + list(plan.get("warnings") or []),
     }
     log.info(
         "planned %.0f mi trip via %s in %.2fs (geocode+route %.2fs, engine %.2fs, assemble %.2fs)",

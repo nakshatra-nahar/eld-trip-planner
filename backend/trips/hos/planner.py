@@ -20,7 +20,7 @@ _MINUTE_EPS = 1e-9
 
 @dataclass
 class PlanOptions:
-    include_inspections: bool = True
+    include_inspections: bool = False  # off by default, as in the API (the brief does not list them)
     rest_status: str = R.SB  # "SB" | "OFF"; 34-h restarts are always OFF
     fuel_stop_minutes: int = 30
 

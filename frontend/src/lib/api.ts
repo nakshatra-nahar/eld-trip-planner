@@ -122,6 +122,12 @@ export function describeError(error: unknown): { title: string; message: string 
           message: `${error.message} Make sure all three locations are reachable by road in the US or Canada.`,
         }
       case 'upstream_unavailable':
+        if (/^geocod/i.test(error.message)) {
+          return {
+            title: 'Place search is busy',
+            message: 'The free place-search service did not respond. This is usually temporary; try again in a few seconds.',
+          }
+        }
         return {
           title: 'Routing service is busy',
           message: 'The free routing service did not respond. This is usually temporary; try again in a few seconds.',

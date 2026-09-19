@@ -11,12 +11,16 @@ export function parseWallTime(value: string): Date {
   return new Date(Date.UTC(y, m - 1, d, hh, mm))
 }
 
-/** The next full hour in the viewer's local time, as a datetime-local value. */
-export function nextFullHour(now = new Date()): string {
+/**
+ * The next `hour`:00 in the viewer's local time, as a datetime-local value: today if that is
+ * still ahead, otherwise tomorrow. The form defaults to a morning start so a trip planned in
+ * the evening does not begin with an overnight drive.
+ */
+export function nextMorning(hour = 8, now = new Date()): string {
   const d = new Date(now)
-  d.setMinutes(0, 0, 0)
-  d.setHours(d.getHours() + 1)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`
+  d.setHours(hour, 0, 0, 0)
+  if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(hour)}:00`
 }
 
 export function isValidWallTime(value: string): boolean {

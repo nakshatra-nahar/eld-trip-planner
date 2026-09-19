@@ -15,9 +15,11 @@ export interface PrintLogsProps {
   tripLabel?: string
   /** Per-date note printed on the sheet (see lib/dutyPeriods). */
   notes?: ReadonlyMap<string, string | null>
+  /** Home-terminal time zone abbreviation the sheets are drawn in, e.g. "CDT". */
+  tzAbbr?: string
 }
 
-export function PrintLogs({ logs, header, tripLabel, notes }: PrintLogsProps) {
+export function PrintLogs({ logs, header, tripLabel, notes, tzAbbr }: PrintLogsProps) {
   useEffect(() => {
     document.body.classList.add(PRINT_CLASS)
     return () => document.body.classList.remove(PRINT_CLASS)
@@ -29,7 +31,7 @@ export function PrintLogs({ logs, header, tripLabel, notes }: PrintLogsProps) {
       <style>{'@page { size: letter landscape; margin: 0.3in; }'}</style>
       {logs.map((lg) => (
         <div key={lg.date} className="ls-print-page">
-          <LogSheet log={lg} header={header} dayCount={logs.length} tripLabel={tripLabel} note={notes?.get(lg.date)} />
+          <LogSheet log={lg} header={header} dayCount={logs.length} tripLabel={tripLabel} note={notes?.get(lg.date)} tzAbbr={tzAbbr} />
         </div>
       ))}
     </div>,

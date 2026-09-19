@@ -1,4 +1,4 @@
-import { CalendarClock, Hourglass, PencilLine, Plus } from 'lucide-react'
+import { ArrowDown, CalendarClock, CalendarDays, Hourglass, PencilLine, Plus } from 'lucide-react'
 import type { Ref } from 'react'
 import { cn } from '../../lib/cn'
 import { ROLE_ICON } from '../../lib/duty'
@@ -10,12 +10,14 @@ interface TripOverviewProps {
   plan: PlanResponse
   onEdit: () => void
   onNew: () => void
+  /** Opens the Daily Logs tab and scrolls to it. */
+  onViewLogs?: () => void
   /** Focus target after planning (the form this replaces unmounts). */
   headingRef?: Ref<HTMLHeadingElement>
 }
 
 /** Compact read-only view of the planned trip's inputs, shown in place of the form after planning. */
-export function TripOverview({ plan, onEdit, onNew, headingRef }: TripOverviewProps) {
+export function TripOverview({ plan, onEdit, onNew, onViewLogs, headingRef }: TripOverviewProps) {
   const { input } = plan
   const stops = [
     { role: 'current' as const, title: 'Current', label: placeLabel(input.current_location.label) },
@@ -40,7 +42,11 @@ export function TripOverview({ plan, onEdit, onNew, headingRef }: TripOverviewPr
         tabIndex={-1}
         className="mt-1 font-display text-[22px] leading-tight font-extrabold tracking-tight text-balance text-ink-900 focus:outline-none"
       >
-        {stops[1].label} <span className="text-hw-500" aria-label="to">→</span> {stops[2].label}
+        {stops[1].label}{' '}
+        <span className="text-hw-500" aria-hidden="true">
+          →
+        </span>
+        <span className="sr-only"> to </span> {stops[2].label}
       </h1>
 
       <ol className="mt-4 grid gap-2.5">
@@ -92,6 +98,18 @@ export function TripOverview({ plan, onEdit, onNew, headingRef }: TripOverviewPr
           </dd>
         </div>
       </dl>
+
+      {onViewLogs && (
+        <Button
+          variant="primary"
+          onClick={onViewLogs}
+          icon={<CalendarDays className="size-4 text-hw-300" aria-hidden />}
+          className="mt-4 w-full"
+        >
+          View {plan.daily_logs.length} daily log sheet{plan.daily_logs.length === 1 ? '' : 's'}
+          <ArrowDown className="size-4 text-ink-300" aria-hidden />
+        </Button>
+      )}
     </div>
   )
 }

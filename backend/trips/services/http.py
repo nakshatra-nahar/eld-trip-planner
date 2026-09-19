@@ -1,4 +1,4 @@
-"""Shared HTTP plumbing for the free upstream services (OSRM, Photon, Nominatim)."""
+"""Shared HTTP plumbing for the free upstream services (Valhalla, OSRM, Photon, Nominatim)."""
 
 from __future__ import annotations
 

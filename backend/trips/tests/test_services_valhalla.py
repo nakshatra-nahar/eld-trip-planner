@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 import requests
 
+from trips.hos.profile import LegProfile
 from trips.services import routing, valhalla
-from trips.services.errors import RouteNotFound
+from trips.services.errors import RouteNotFound, UpstreamUnavailable
 from trips.services.http import Deadline
 from trips.services.places import haversine_miles
 
@@ -483,3 +484,68 @@ def test_stitch_turns_a_seam_onto_a_new_road_into_continue():
     assert len(coords) == 4
     assert [(m["type"], m["begin"], m["end"]) for m in maneuvers] == [(1, 0, 1), (8, 1, 3), (4, 3, 3)]
     assert maneuvers[1]["instruction"] == "Continue on I 44."
+
+
+# ---------------------------------------------------------------- truck detours
+
+VANCOUVER, SEATTLE, SAN_FRANCISCO = (-123.1207, 49.2827), (-122.3321, 47.6062), (-122.4194, 37.7749)
+
+
+def _leg(a, b, miles: float) -> routing.RoutedLeg:
+    profile = LegProfile.straight(a, b, miles, miles)
+    return routing.RoutedLeg(profile, [a, b], [], miles, miles / 60)
+
+
+def _stub_routes(monkeypatch, truck_miles, car_miles):
+    """Stub Valhalla and OSRM with straight legs of the given lengths; count OSRM calls."""
+    waypoints = [VANCOUVER, SEATTLE, SAN_FRANCISCO]
+    calls = []
+
+    def fake_truck(wps, deadline, osrm):
+        legs = [_leg(a, b, m) for (a, b), m in zip(pairwise(wps), truck_miles, strict=True)]
+        return routing.RouteResult(legs, valhalla.PROVIDER, truck_routing=True)
+
+    def fake_osrm(wps, deadline=None):
+        calls.append(wps)
+        legs = [_leg(a, b, m) for (a, b), m in zip(pairwise(wps), car_miles, strict=True)]
+        return routing.RouteResult(legs, "OSRM (test)")
+
+    monkeypatch.setattr(valhalla, "fetch_truck_route", fake_truck)
+    monkeypatch.setattr(valhalla, "fetch_route", fake_osrm)
+    return waypoints, calls
+
+
+def test_truck_detour_falls_back_to_the_car_route(monkeypatch):
+    """Vancouver -> Seattle: Valhalla's truck graph avoids the Blaine crossing (532 mi vs 141)."""
+    waypoints, calls = _stub_routes(monkeypatch, truck_miles=[532.0, 808.0], car_miles=[141.3, 808.0])
+    result = valhalla.route_trip(waypoints, Deadline(25))
+    assert len(calls) == 1
+    assert result.provider == "OSRM (test)" and result.truck_routing is False
+    assert result.legs[0].distance_miles == pytest.approx(141.3)
+    assert result.detour_miles == pytest.approx(532.0 - 141.3, abs=0.1)
+
+
+def test_normal_truck_leg_never_asks_osrm(monkeypatch):
+    """A leg ~1.2x the straight line keeps the truck route without an OSRM call."""
+    crow = haversine_miles(VANCOUVER[1], VANCOUVER[0], SEATTLE[1], SEATTLE[0])
+    waypoints, calls = _stub_routes(monkeypatch, truck_miles=[1.2 * crow, 808.0], car_miles=[crow, 808.0])
+    result = valhalla.route_trip(waypoints, Deadline(25))
+    assert calls == [] and result.truck_routing is True and result.detour_miles == 0.0
+
+
+def test_long_but_not_worse_than_osrm_keeps_the_truck_route(monkeypatch):
+    """A winding leg that OSRM also finds long (mountain roads) stays on the truck route."""
+    waypoints, calls = _stub_routes(monkeypatch, truck_miles=[400.0, 808.0], car_miles=[380.0, 808.0])
+    result = valhalla.route_trip(waypoints, Deadline(25))
+    assert len(calls) == 1 and result.truck_routing is True and result.detour_miles == 0.0
+
+
+def test_osrm_error_during_detour_check_keeps_the_truck_route(monkeypatch):
+    waypoints, _ = _stub_routes(monkeypatch, truck_miles=[532.0, 808.0], car_miles=[141.3, 808.0])
+
+    def broken(wps, deadline=None):
+        raise UpstreamUnavailable("down")
+
+    monkeypatch.setattr(valhalla, "fetch_route", broken)
+    result = valhalla.route_trip(waypoints, Deadline(25))
+    assert result.truck_routing is True and result.legs[0].distance_miles == 532.0

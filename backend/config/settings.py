@@ -10,6 +10,9 @@ Configuration comes from the environment, with development defaults:
     CORS_ALLOWED_ORIGIN_REGEXES  optional comma-separated regexes (e.g. Vercel previews)
     LOG_LEVEL              root log level (default INFO)
     PLAN_TIME_BUDGET_SECONDS  total upstream time budget for one plan request (default 25)
+    PLAN_RATE              per-IP rate limit of trip plans (default 20/min)
+    GEOCODE_RATE           per-IP rate limit of the geocode autocomplete proxy (default 60/min)
+    UPSTREAM_CONTACT       contact (repo URL or email) sent in the upstream User-Agent
 """
 
 from __future__ import annotations

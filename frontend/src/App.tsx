@@ -14,15 +14,19 @@ import { TopBar } from './components/TopBar'
 import { Card } from './components/ui'
 import { EMPTY_LOG_HEADER, SAMPLE_LOG_HEADER, useLogHeader } from './hooks/useLogHeader'
 import { api, type ApiClient, ApiRequestError, describeError } from './lib/api'
-import { formatMiles, nextFullHour, placeLabel } from './lib/format'
+import { formatMiles, nextMorning, placeLabel } from './lib/format'
 import {
   decodePlanQuery,
   encodePlanQuery,
   readCachedPlan,
+  readTab,
   requestFromPlan,
+  type ResultsTab,
   withPlanQuery,
+  withTab,
   writeCachedPlan,
 } from './lib/planQuery'
+import { scrollBehavior } from './lib/motion'
 import type { LocationInput, PlanRequest, PlanResponse, TimelineEvent } from './types/api'
 
 type Status = 'idle' | 'loading' | 'success' | 'error'
@@ -41,7 +45,7 @@ function initialValues(): PlannerValues {
     pickup: EMPTY_LOCATION,
     dropoff: EMPTY_LOCATION,
     cycleUsed: '0',
-    startTime: nextFullHour(),
+    startTime: nextMorning(),
     options: DEFAULT_OPTIONS,
   }
 }
@@ -73,11 +77,17 @@ function historyEntry(): HistoryEntry | null {
   return state && typeof state === 'object' && 'view' in state ? (state as HistoryEntry) : null
 }
 
-/** This page's URL with the plan query replaced (null = removed); ?demo= and the hash are kept. */
-function pageUrl(planQuery: string | null): string {
+/**
+ * This page's URL with the plan query replaced (null = removed, which also drops ?tab=);
+ * ?demo= and the hash are kept.
+ */
+function pageUrl(planQuery: string | null, tab: ResultsTab | null = null): string {
   const { pathname, search, hash } = window.location
-  return `${pathname}${withPlanQuery(search, planQuery)}${hash}`
+  return `${pathname}${withTab(withPlanQuery(search, planQuery), planQuery ? tab : null)}${hash}`
 }
+
+/** A slow upstream router can take 15-25 s; after this long the loading copy says so. */
+const SLOW_AFTER_MS = 7000
 
 const planQueryOf = (plan: PlanResponse) => encodePlanQuery(requestFromPlan(plan))
 
@@ -126,6 +136,11 @@ export default function App() {
   /** True while the plan on screen is the bundled sample, not a live result. */
   const [isSample, setIsSample] = useState(false)
   const [announcement, setAnnouncement] = useState('')
+  /** Results tab; opens on the daily logs unless the URL names another (?tab=). */
+  const [tab, setTab] = useState<ResultsTab>(() => readTab(window.location.search))
+  const tabRef = useRef(tab)
+  /** True once a plan request has been running for SLOW_AFTER_MS. */
+  const [slow, setSlow] = useState(false)
   const { header, setHeader, update: updateHeader } = useLogHeader()
 
   const inflight = useRef<AbortController | null>(null)
@@ -139,7 +154,36 @@ export default function App() {
   useEffect(() => {
     planRef.current = plan
     valuesRef.current = values
-  }, [plan, values])
+    tabRef.current = tab
+  }, [plan, values, tab])
+
+  const loadingNow = status === 'loading'
+  useEffect(() => {
+    if (!loadingNow) return
+    const timer = window.setTimeout(() => setSlow(true), SLOW_AFTER_MS)
+    return () => {
+      window.clearTimeout(timer)
+      setSlow(false)
+    }
+  }, [loadingNow])
+
+  /** Switch results tab and keep it in the URL, so a reload or share link reopens it. */
+  const changeTab = useCallback((next: ResultsTab) => {
+    setTab(next)
+    tabRef.current = next
+    const { pathname, search, hash } = window.location
+    window.history.replaceState(window.history.state, '', `${pathname}${withTab(search, next)}${hash}`)
+  }, [])
+
+  /** "View log sheets": open the Daily Logs tab and bring the results into view. */
+  const viewLogs = useCallback(() => {
+    changeTab('logs')
+    requestAnimationFrame(() => {
+      const el = document.getElementById('results')
+      el?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' })
+      el?.focus({ preventScroll: true })
+    })
+  }, [changeTab])
 
   const showPlan = useCallback((next: PlanResponse, { focus = false } = {}) => {
     focusPlan.current = focus
@@ -190,8 +234,8 @@ export default function App() {
         const query = planQueryOf(result)
         writeCachedPlan(query, result)
         const entry: HistoryEntry = { view: 'results' }
-        if (history === 'push') window.history.pushState(entry, '', pageUrl(query))
-        else if (history === 'replace') window.history.replaceState(entry, '', pageUrl(query))
+        if (history === 'push') window.history.pushState(entry, '', pageUrl(query, tabRef.current))
+        else if (history === 'replace') window.history.replaceState(entry, '', pageUrl(query, tabRef.current))
         setIsSample(false)
         showPlan(result, { focus: history === 'push' })
       } catch (err) {
@@ -242,6 +286,7 @@ export default function App() {
     setEditing(true)
     setIsSample(false)
     setAnnouncement('')
+    setTab('logs')
     if (!IS_DEMO) setClient(api)
   }, [])
 
@@ -284,7 +329,7 @@ export default function App() {
     if (!historyEntry()) {
       const query = encodePlanQuery(BOOT.request)
       window.history.replaceState({ view: 'form' } satisfies HistoryEntry, '', pageUrl(null))
-      window.history.pushState({ view: 'results' } satisfies HistoryEntry, '', pageUrl(query))
+      window.history.pushState({ view: 'results' } satisfies HistoryEntry, '', pageUrl(query, tabRef.current))
     }
     // fetchPlan only updates state once the request settles (the loading state came from BOOT).
     // oxlint-disable-next-line react/set-state-in-effect
@@ -300,6 +345,7 @@ export default function App() {
         if (entry?.fresh) resetToNewTrip()
         else showForm()
       } else if (request) {
+        setTab(readTab(window.location.search))
         showPlanFor(request, 'none')
       } else if (planRef.current) {
         setEditing(false)
@@ -314,8 +360,8 @@ export default function App() {
   const shareUrl = useMemo(() => {
     if (!plan || isSample) return undefined
     const { origin, pathname, search } = window.location
-    return `${origin}${pathname}${withPlanQuery(IS_DEMO ? search : '', planQueryOf(plan))}`
-  }, [plan, isSample])
+    return `${origin}${pathname}${withTab(withPlanQuery(IS_DEMO ? search : '', planQueryOf(plan)), tab)}`
+  }, [plan, isSample, tab])
 
   const liveErrors = useMemo(() => liveServerErrors(serverErrors, rejectedValues, values), [serverErrors, rejectedValues, values])
 
@@ -347,7 +393,7 @@ export default function App() {
     // On stacked (mobile) layouts, bring the map into view.
     const box = mapBoxRef.current?.getBoundingClientRect()
     if (box && (box.bottom < 60 || box.top > window.innerHeight)) {
-      mapBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      mapBoxRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
     }
   }, [])
 
@@ -362,11 +408,18 @@ export default function App() {
     return entries.flatMap(([role, s]) => (s ? [{ role, lngLat: [s.lon, s.lat], label: placeLabel(s.short_label) }] : []))
   }, [cur.selected, pu.selected, dr.selected])
 
-  const loading = status === 'loading'
+  const loading = loadingNow
   const formVisible = editing || !plan
 
   return (
     <div className="min-h-dvh">
+      {/* Keyboard users skip the form and the map's many stop markers. */}
+      <a
+        href={plan && !loading ? '#results' : '#planner'}
+        className="sr-only rounded-lg bg-white text-sm font-semibold text-ink-900 shadow-pop focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2.5 focus:outline-2 focus:outline-offset-2 focus:outline-hw-500"
+      >
+        {plan && !loading ? 'Skip to trip results' : 'Skip to trip planner'}
+      </a>
       <TopBar demo={IS_DEMO || isSample} />
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
@@ -377,13 +430,14 @@ export default function App() {
           {/* Below lg this column dissolves (display: contents) so the map can sit right after
               the trip card and before the long summary. */}
           <div className="contents min-w-0 lg:grid lg:grid-cols-[minmax(0,1fr)] lg:gap-5" data-print-hide>
-            <Card>
+            <Card id="planner" tabIndex={-1} className="scroll-mt-20 focus:outline-none">
               {formVisible ? (
                 <PlannerForm
                   values={values}
                   onValuesChange={setValues}
                   onSubmit={runPlan}
                   loading={loading}
+                  slow={slow}
                   client={client}
                   header={header}
                   onHeaderChange={updateHeader}
@@ -396,6 +450,7 @@ export default function App() {
                 <TripOverview
                   plan={plan}
                   headingRef={overviewHeadingRef}
+                  onViewLogs={viewLogs}
                   onEdit={() => {
                     window.history.pushState({ view: 'form' } satisfies HistoryEntry, '', pageUrl(null))
                     setEditing(true)
@@ -432,6 +487,8 @@ export default function App() {
               selectedStopId={selectedId}
               onSelectStop={setSelectedId}
               loading={loading}
+              slow={slow}
+              onLoadSample={loadSample}
             />
           </div>
         </div>
@@ -445,6 +502,8 @@ export default function App() {
             selectedId={selectedId}
             onSelectEvent={selectEvent}
             shareUrl={shareUrl}
+            tab={tab}
+            onTabChange={changeTab}
           />
         ) : (
           <div data-print-hide>

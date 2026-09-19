@@ -382,6 +382,10 @@ class _PlanBuilder:
         rest = "sleeper berth" if opts.rest_status == R.SB else "off duty"
         items = [
             "Property-carrying driver on the 70-hour/8-day cycle; no adverse driving conditions.",
+            (
+                "Hours of service follow US FMCSA rules (70 h/8 days) for the whole trip, as the brief "
+                "specifies; Canadian legs are not planned under Canada's own hours-of-service rules."
+            ),
             "The driver starts the trip rested (at least 10 hours off), so the 11- and 14-hour clocks are fresh.",
             "The driver is off duty from midnight until the trip starts and from the trip end until midnight.",
             (
@@ -397,12 +401,21 @@ class _PlanBuilder:
             "A 34-hour restart at the trip start counts the off-duty time since midnight toward its 34 hours.",
             "Log sheets use the home-terminal time zone of the start location for the whole trip, "
             "even across time zones (FMCSA p.16); stops also show their local time.",
+            "Log times use the home-terminal clock and do not shift for a daylight-saving change during the trip.",
+            "Times are to the minute, as an ELD records them; the grid shows the paper form's 15-minute ticks.",
+            "The driver resumes at the earliest legal moment after a 10-hour rest or 34-hour restart, "
+            "so departures can fall overnight.",
             "A single driver: no split sleeper berth and no team driving.",
             f"Truck speed is capped at {R.TRUCK_SPEED_CAP_MPH:g} mph over each route segment.",
         ]
+        # After the pickup/drop-off line.
+        at = next(i for i, s in enumerate(items) if s.startswith("Pickup and drop-off")) + 1
         if opts.include_inspections:
-            items.insert(5, "A 30-minute pre-trip inspection starts every duty period and a 15-minute "
-                            "post-trip inspection ends it (on duty, not driving).")
+            items.insert(at, "A 30-minute pre-trip inspection starts every duty period and a 15-minute "
+                             "post-trip inspection ends it (on duty, not driving).")
+        else:
+            items.insert(at, "No pre-/post-trip inspection time is added: the brief lists only pickup, "
+                             "drop-off and fueling as on-duty stops (inspections can be turned on).")
         return items
 
     def warnings(self) -> list[str]:

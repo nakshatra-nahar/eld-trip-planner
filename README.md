@@ -6,9 +6,9 @@
 - **API:** https://eld-trip-planner-api-ten.vercel.app/api/health/
 - **Loom walkthrough:** _link to be added_
 
-![Planned trip: Los Angeles → Phoenix → New York at 30 h used, truck-routed, with the 34-hour restart in place of the first 10-hour rest](docs/screenshots/results.png)
+![Planned trip: Los Angeles → Phoenix → New York at 30 h used, truck-routed, with three 10-hour rests and a 34-hour restart on day 4](docs/screenshots/results.png)
 
-| Daily log sheet (day 1 of 6, 34-hour restart in progress) | Mobile |
+| Daily log sheet (day 1 of 6: start, pickup, 10-hour rest) | Mobile |
 |---|---|
 | ![FMCSA daily log sheet drawn in SVG](docs/screenshots/log-sheet.png) | ![Mobile layout](docs/screenshots/mobile.png) |
 
@@ -37,17 +37,17 @@
 **Planning**
 - Location autocomplete for the US and Canada, with keyboard navigation, "Use my location", and a button to swap pickup and drop-off.
 - A Current Cycle Used input with a number field, a 0-70 slider, and a line showing the hours left.
-- A start date and time (defaults to the next full hour), plus advanced options: pre-/post-trip inspections, whether 10-hour rests are logged as sleeper berth or off duty, and the fuel-stop length.
+- A start date and time in home-terminal time (defaults to the next 08:00, so a trip planned in the evening does not start with an overnight drive), plus advanced options: pre-/post-trip inspections (off by default), whether 10-hour rests are logged as sleeper berth or off duty, and the fuel-stop length.
 - Three example trips: a short haul, a cross-country run, and a trip close to the cycle limit that triggers a 34-hour restart.
 - **Share links.** Every plan writes its request to the URL (`?from=Chicago,%20IL@41.8781,-87.6298&pickup=…&to=…&cycle=10&start=2026-09-21T06:00`). Reload, Back and Forward restore it from a session cache without re-planning, Back from the results returns to the form, and "Copy share link" copies a link that re-plans the same trip anywhere.
 
 **Results**
-- **Truck routing.** Routes come from [Valhalla](https://valhalla.github.io/valhalla/)'s `truck` profile (truck-legal roads and truck speeds) on the FOSSGIS public server, so the trip follows interstates and truck routes. If Valhalla is unavailable the backend falls back to OSRM's car network, marks the route "Car network (OSRM fallback)" and says so in the warnings.
+- **Truck routing.** Routes come from [Valhalla](https://valhalla.github.io/valhalla/)'s `truck` profile (truck-legal roads and truck speeds) on the FOSSGIS public server, so the trip follows interstates and truck routes. If Valhalla is unavailable the backend falls back to OSRM's car network, marks the route "Car network (OSRM fallback)" and says so in the warnings. It does the same when the truck route detours far beyond the car route (for example where OpenStreetMap marks a border crossing truck-restricted), and the warning gives the detour.
 - A MapLibre map. The drive to pickup and the loaded leg are drawn in different styles. Pins mark each stop (fuel, 30-minute break, 10-hour rest, 34-hour restart, pickup, drop-off, inspections) with a popup for its time window, duration, place and mile marker. Clicking an itinerary row flies the map to that stop.
 - A trip summary with a routing badge ("Truck-routed (Valhalla)"): total miles, driving and on-duty hours, trip length, log-sheet count, fuel stops, rests and restarts, cycle hours left at arrival, and a duty-status timeline bar for the whole trip.
 - An itinerary grouped by calendar day, with per-day totals by duty status. Times are home-terminal time, as on the logs; each stop in another zone also shows its **local time** ("08:19 EDT local"), and a pickup or drop-off between 22:00 and 05:00 local gets an "Outside typical dock hours" chip. A day that holds two duty periods with more than 11:00 of driving in total is explained on the day card and the sheet ("2 duty periods today: 11:00 + 0:45 driving; each ≤ 11 h").
-- **Daily Logs:** one FMCSA-style sheet per calendar day, drawn in SVG. Each sheet has the 24-hour grid and duty line, row totals that add up to 24, remarks brackets naming the city and state, and the 70-hour/8-day recap (A, B and C). Header fields (driver, carrier, truck and trailer numbers, shipping document) are saved in the browser. Sheets can be printed or saved as PDF (one landscape page per sheet), or downloaded as SVG or PNG.
-- **Directions:** turn-by-turn steps per leg, written in English by our own generator from the Valhalla maneuvers (or OSRM's on the fallback). City streets before the first and after the last interstate fold into a "Local streets" row.
+- **Daily Logs:** one FMCSA-style sheet per calendar day, drawn in SVG. Each sheet has the 24-hour grid and duty line, row totals that add up to 24, remarks brackets naming the city and state (and the highway for a stop outside a city), and the 70-hour/8-day recap (A, B and C). Header fields (driver, carrier, truck and trailer numbers, shipping document) are saved in the browser. Sheets can be printed or saved as PDF (one landscape page per sheet), or downloaded as SVG or PNG.
+- **Directions:** turn-by-turn steps per leg, written in English by our own generator from the Valhalla maneuvers (or OSRM's on the fallback). Runs of city streets before the first and after the last interstate are folded into a "Local streets" row.
 - The layout is responsive down to phone width. It has skeleton loading states, error messages that say what went wrong, visible focus rings and 44 px touch targets.
 
 ## How the HOS engine works
@@ -68,7 +68,7 @@ These apply to a property-carrying driver on the 70-hour/8-day cycle with no adv
 | 34-hour restart | 34 consecutive hours off duty | Resets the cycle to 0. Logged as off duty. A restart at the trip start counts the time off since midnight, so for an 08:00 start it lasts 26 h. | p.11 |
 | Fuel | At least every 1,000 miles (assessment brief) | 30 min on duty by default. Fuel due within 75 miles is taken at a rest or break that is happening anyway, and fuel due in the first 3 h of the next duty period is taken before the rest, as long as that adds no fuel stop. | brief |
 | Pickup and drop-off | 1 hour each (assessment brief) | Logged on duty, not driving. Loading counts as on-duty time (p.5). | brief, p.5 |
-| Inspections | Optional, on by default | 30-min pre-trip at the start of each duty period, 15-min post-trip before each rest and after drop-off. Both are on duty (p.5). | p.5 |
+| Inspections | Optional, off by default (the brief lists only pickup, drop-off and fuel as time costs) | When turned on: 30-min pre-trip at the start of each duty period, 15-min post-trip before each rest and after drop-off. Both are on duty (p.5). | p.5 |
 
 On-duty work after the 14th hour or past 70 hours is legal. Only driving is blocked (p.9-10), so a drop-off can always be completed.
 
@@ -76,8 +76,8 @@ On-duty work after the 14th hour or past 70 hours is legal. Only driving is bloc
 
 [`planner.py`](backend/trips/hos/planner.py) drives leg 0 (current to pickup), does the pickup, drives leg 1 (pickup to drop-off), then does the drop-off. Inside a leg, each step of `_Planner._drive_step` checks these in priority order:
 
-1. **Cycle exhausted:** post-trip inspection, then a **34-hour restart**. Driving stops early enough that the post-trip inspection still ends within 70 hours.
-2. **11 hours driven or 14-hour window closed:** post-trip inspection, then a **10-hour rest**. If fuel falls due within the next 75 miles, or within the first 3 hours of the next duty period's driving, the driver fuels at the same stop. If the rest of the trip cannot fit in the cycle and the next duty period could drive less than an hour, the planner takes a 34-hour restart instead of a rest that would unlock no useful driving.
+1. **Cycle exhausted:** a **34-hour restart** (after a post-trip inspection when inspections are on). Driving stops early enough that any post-trip inspection still ends within 70 hours.
+2. **11 hours driven or 14-hour window closed:** a **10-hour rest** (after a post-trip inspection when inspections are on). If fuel falls due within the next 75 miles, or within the first 3 hours of the next duty period's driving, the driver fuels at the same stop. If the rest of the trip cannot fit in the cycle and the next duty period could drive less than an hour, the planner takes a 34-hour restart instead of a rest that would unlock no useful driving.
 3. **8 hours driven since the last 30-minute interruption:** a **30-minute break**. If fuel is due, or due within 75 miles, and the fuel stop lasts at least 30 minutes, the fuel stop is the break. If less than 15 minutes of driving could follow the break, the planner ends the duty period instead.
 4. **1,000 miles since the last fuel:** a **fuel stop**. As with the break, if almost no driving could follow it, the fuel, post-trip and rest happen at the same stop. A fuel stop shorter than 30 minutes is followed by the 30-minute break at the same place when the break is due within the hour.
 5. **Otherwise, drive** until the first limit is reached: the 11-hour limit, the 14-hour window, the 8-hour break, the cycle, the fuel range, or the end of the leg.
@@ -144,7 +144,7 @@ All endpoints live under `/api/`. The trailing slash is optional. Planning is ra
 
 ### `POST /api/trips/plan/`
 
-Request (each location takes either `lat`/`lon` or a free-text `query`; `options` is optional):
+Request (each location takes either `lat`/`lon` or a free-text `query`; `start_time` is required, as `YYYY-MM-DDTHH:MM` in home-terminal time; `options` is optional and defaults to `include_inspections: false`, `rest_status: "SB"`, `fuel_stop_minutes: 30`):
 
 ```json
 {
@@ -153,7 +153,7 @@ Request (each location takes either `lat`/`lon` or a free-text `query`; `options
   "dropoff_location": { "query": "Dallas, TX" },
   "current_cycle_used_hours": 10,
   "start_time": "2026-09-21T06:00",
-  "options": { "include_inspections": true, "rest_status": "SB", "fuel_stop_minutes": 30 }
+  "options": { "include_inspections": false, "rest_status": "SB", "fuel_stop_minutes": 30 }
 }
 ```
 
@@ -162,26 +162,26 @@ Response (`PlanResponse`, abridged):
 ```jsonc
 {
   "input":    { "current_location": { "label": "Chicago, IL", "lat": 41.8781, "lon": -87.6298 }, "...": "..." },
-  "route":    { "distance_miles": 963.2, "duration_hours": 15.15, "geometry": [[-87.62435, 41.87556], "..."],
-                "legs": [{ "from_role": "current", "to_role": "pickup", "distance_miles": 297.2,
-                           "instructions": [{ "text": "Drive south on South Michigan Avenue", "maneuver": "depart", "...": "..." }] }],
+  "route":    { "distance_miles": 962.2, "duration_hours": 15.18, "geometry": [[-87.62977, 41.8781], "..."],
+                "legs": [{ "from_role": "current", "to_role": "pickup", "distance_miles": 297.4,
+                           "instructions": [{ "text": "Drive south on South Federal Street", "maneuver": "depart", "...": "..." }] }],
                 "provider": "Valhalla truck (valhalla1.openstreetmap.de)", "truck_routing": true },
-  "timeline": [{ "id": "e1", "kind": "pre_trip", "status": "ON", "label": "Pre-trip inspection",
-                 "start": "2026-09-21T06:00", "end": "2026-09-21T06:30", "duration_hours": 0.5,
-                 "miles": 0.0, "start_mile": 0.0, "end_mile": 0.0, "leg_index": 0,
-                 "start_location": { "lat": 41.87556, "lon": -87.62435, "name": "Chicago, IL", "tz": "America/Chicago" },
+  "timeline": [{ "id": "e1", "kind": "drive", "status": "D", "label": "Driving",
+                 "start": "2026-09-21T06:00", "end": "2026-09-21T10:44", "duration_hours": 4.73,
+                 "miles": 297.4, "start_mile": 0.0, "end_mile": 297.4, "leg_index": 0,
+                 "start_location": { "lat": 41.8781, "lon": -87.62977, "name": "Chicago, IL", "tz": "America/Chicago" },
                  "local_start": "2026-09-21T06:00", "start_tz_abbr": "CDT", "...": "..." }],
-  "stops":    [{ "id": "e3", "kind": "pickup", "status": "ON", "label": "Pickup (loading)",
-                 "start": "2026-09-21T11:13", "end": "2026-09-21T12:13", "mile_marker": 297.2, "day_number": 1,
-                 "local_start": "2026-09-21T11:13", "local_tz_abbr": "CDT", "...": "..." }],
-  "daily_logs": [{ "date": "2026-09-21", "day_number": 1, "total_miles": 696.5,
+  "stops":    [{ "id": "e2", "kind": "pickup", "status": "ON", "label": "Pickup (loading)",
+                 "start": "2026-09-21T10:44", "end": "2026-09-21T11:44", "mile_marker": 297.4, "day_number": 1,
+                 "local_start": "2026-09-21T10:44", "local_tz_abbr": "CDT", "...": "..." }],
+  "daily_logs": [{ "date": "2026-09-21", "day_number": 1, "total_miles": 694.1,
                    "segments": [{ "status": "OFF", "start_minute": 0, "end_minute": 360 }, "..."],
-                   "totals": { "OFF": 6.0, "SB": 5.25, "D": 11.0, "ON": 1.75 },
-                   "remarks": [{ "start_minute": 673, "end_minute": 733, "status": "ON", "location": "St. Louis, MO", "note": "Pickup" }],
-                   "on_duty_hours": 12.75, "cycle_hours_used": 22.75, "cycle_hours_available": 47.25,
+                   "totals": { "OFF": 6.0, "SB": 6.0, "D": 11.0, "ON": 1.0 },
+                   "remarks": [{ "start_minute": 644, "end_minute": 704, "status": "ON", "location": "St. Louis, MO", "note": "Pickup" }],
+                   "on_duty_hours": 12.0, "cycle_hours_used": 22.0, "cycle_hours_available": 48.0,
                    "from_location": "Chicago, IL", "to_location": "Malvern, AR" }],
-  "summary":  { "total_miles": 963.2, "total_driving_hours": 15.15, "num_days": 2, "num_rests": 1,
-                "num_restarts": 0, "cycle_hours_available_at_end": 41.35, "...": "..." },
+  "summary":  { "total_miles": 962.2, "total_driving_hours": 15.17, "num_days": 2, "num_rests": 1,
+                "num_restarts": 0, "cycle_hours_available_at_end": 42.83, "...": "..." },
   "assumptions": ["The driver starts the trip rested (at least 10 hours off), ...", "..."],
   "warnings": []
 }
@@ -189,10 +189,15 @@ Response (`PlanResponse`, abridged):
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `validation_error` | Cycle hours outside 0-70, a bad `start_time` (use `YYYY-MM-DDTHH:MM`), or a location with neither coordinates nor a query |
+| 400 | `validation_error` | Cycle hours outside 0-70, a missing or bad `start_time` (use `YYYY-MM-DDTHH:MM`), a location with neither coordinates nor a query, or a body that is not valid JSON |
+| 413 | `payload_too_large` | The request body is over Django's upload size limit |
 | 422 | `geocode_failed` | A free-text location has no US or Canadian match |
+| 422 | `unsupported_region` | A location given by coordinates has no US or Canadian place within 150 miles |
 | 422 | `route_not_found` | The points cannot be connected by road (for example, across an ocean) |
+| 429 | `rate_limited` | Over the per-IP rate limit; the `Retry-After` header says how many seconds to wait |
 | 502 | `upstream_unavailable` | Valhalla and both OSRM hosts failed, or the time budget ran out |
+
+Any other path returns 404 `not_found`, and an unexpected server error returns 500 `internal_error`.
 
 ### `GET /api/geocode/?q=joliet`
 
@@ -248,8 +253,7 @@ eld-trip-planner/
 │   │   └── mocks/               recorded live responses for ?demo=
 │   └── vercel.json
 └── docs/
-    ├── SPEC.md                  build spec and engine interface
-    ├── LOOM_SCRIPT.md           talk track for the walkthrough video
+    ├── SPEC.md                  design notes: rules, algorithm, API and engine interface
     └── screenshots/
 ```
 
@@ -257,13 +261,19 @@ eld-trip-planner/
 
 You need Python 3.12+ with [uv](https://docs.astral.sh/uv/), and Node 20.19+ or 22.12+ (required by Vite 8).
 
+Run the two servers in separate terminals, each starting from the repository root.
+
+Terminal 1, the backend on http://127.0.0.1:8000:
+
 ```bash
-# Backend: http://127.0.0.1:8000
 cd backend
 uv sync
 uv run python manage.py runserver 8000
+```
 
-# Frontend: http://localhost:5173 (the dev server proxies /api to 127.0.0.1:8000)
+Terminal 2, the frontend on http://localhost:5173 (the dev server proxies `/api` to 127.0.0.1:8000):
+
+```bash
 cd frontend
 npm install
 npm run dev
@@ -275,12 +285,16 @@ Environment variables are documented in [`backend/.env.example`](backend/.env.ex
 
 ## Testing
 
+Each block starts from the repository root.
+
 ```bash
 cd backend
 uv run pytest            # about 300 tests, offline (recorded Valhalla, OSRM and Photon fixtures)
 uv run pytest -m live    # optional smoke tests against the real Valhalla, OSRM and Photon
 uvx ruff check .
+```
 
+```bash
 cd frontend
 npm run build            # tsc type-check + production build
 npm run lint             # oxlint
@@ -341,7 +355,8 @@ The limits are kept in each serverless instance's memory, which is enough to sto
 ## Limitations and future work
 
 - **Rolling 70-hour/8-day recap.** The brief gives one "cycle used" number, so hours never roll off during the trip. This is conservative. With a per-day history of the last 7 days, the engine could drop the oldest day at each midnight and often avoid a restart.
-- **Time zones.** Logs use home-terminal time throughout, as the FMCSA requires (p.16), and stops show local time. Zones come from the nearest dataset place, so a stop within a few miles of a zone boundary can show the neighbouring zone.
+- **Time zones.** Logs use home-terminal time throughout, as the FMCSA requires (p.16), and stops show local time. Zones come from the nearest dataset place, so a stop within a few miles of a zone boundary can show the neighbouring zone. The home-terminal clock does not shift at a daylight-saving change during the trip; the warnings say when a trip crosses one.
+- **Canada.** Locations in Canada are accepted, but the whole trip is planned under the US FMCSA 70-hour/8-day rules, as the brief specifies, and the warnings say so.
 - **Split sleeper berth** (7/3 or 8/2 pairing, p.7-9) and team driving are not modelled. Both could shorten long trips.
 - **Truck details.** Valhalla's truck profile uses default truck dimensions; the planner does not pass a real height, weight or hazmat class, and fuel and rest stops are placed where the limit binds rather than at real truck stops. On the OSRM fallback the route uses the car network.
 - **Adverse driving conditions** and short-haul exceptions (p.12-14) are out of scope, as the brief specifies.

@@ -22,7 +22,8 @@ export type PlannerErrors = Partial<Record<'current' | 'pickup' | 'dropoff' | 'c
 export const EMPTY_LOCATION: LocationValue = { text: '', selected: null }
 
 export const DEFAULT_OPTIONS: PlanOptions = {
-  include_inspections: true,
+  // Off, as in the API: the brief lists only pickup, drop-off and fueling as on-duty stops.
+  include_inspections: false,
   rest_status: 'SB',
   fuel_stop_minutes: 30,
 }

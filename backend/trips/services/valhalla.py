@@ -13,6 +13,10 @@ calls run one at a time with a small gap to respect the server's usage policy.
 
 Each leg's ``LegProfile`` is built from the Valhalla shape: every maneuver's time is
 spread over its shape segments in proportion to distance, then capped at 65 mph.
+
+A truck leg far longer than the straight line is checked against OSRM: when OSM data
+marks the direct road truck-restricted (Vancouver -> Seattle avoids the Blaine crossing
+and runs 532 mi instead of 141), the OSRM car route is used, with ``detour_miles`` set.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import accumulate, pairwise
 from typing import Any
 from urllib.parse import urlparse
@@ -32,6 +36,7 @@ import requests
 
 from trips.hos.profile import LegProfile, LonLat, RouteStep
 
+from .errors import ServiceError
 from .http import Deadline, session
 from .places import haversine_miles, highway_ref
 from .routing import RoutedLeg, RouteResult, fetch_route
@@ -53,6 +58,10 @@ CHUNK_TARGET_KM = 1200.0  # road length per chunk when a leg is split
 SPLIT_WINDOW_MI = 125.0  # how far a split may move from its ideal mile to reach an interstate
 SPLIT_MARGIN_MI = 3.0  # keep splits this far inside an interstate step (away from interchanges)
 SAME_POINT_MI = 0.05  # a leg this short (current == pickup) is not routed
+# A truck leg longer than max(ratio x straight line, straight line + extra) is compared with
+# OSRM, and replaced by the car route when it is longer by both the ratio and the miles below.
+DETOUR_CROW_RATIO, DETOUR_CROW_EXTRA_MI = 1.8, 60.0
+DETOUR_OSRM_RATIO, DETOUR_OSRM_EXTRA_MI = 1.35, 50.0
 
 # Valhalla maneuver type -> (Instruction.maneuver, Instruction.modifier), in OSRM's vocabulary.
 # https://valhalla.github.io/valhalla/api/turn-by-turn/api-reference/#trip-legs-and-maneuvers
@@ -385,6 +394,27 @@ def fetch_truck_route(waypoints: list[LonLat], deadline: Deadline, osrm: Callabl
     return RouteResult(legs=routed, provider=PROVIDER, snap_miles=snap, truck_routing=True)
 
 
+def truck_detour_miles(route: RouteResult, waypoints: list[LonLat], osrm: Callable[[], RouteResult]) -> float:
+    """Miles the truck route adds over OSRM on legs where it detours badly; 0.0 if none does.
+
+    OSRM is only asked when a leg is much longer than the straight line, and an OSRM error
+    keeps the truck route.
+    """
+    detour = 0.0
+    for i, leg in enumerate(route.legs):
+        crow = _miles(waypoints[i], waypoints[i + 1])
+        if leg.distance_miles <= 0 or leg.distance_miles <= max(DETOUR_CROW_RATIO * crow, crow + DETOUR_CROW_EXTRA_MI):
+            continue
+        try:
+            car = osrm().legs[i].distance_miles
+        except ServiceError as exc:
+            log.warning("OSRM check of a %.0f mi truck leg failed: %s", leg.distance_miles, exc)
+            return 0.0
+        if leg.distance_miles > DETOUR_OSRM_RATIO * car and leg.distance_miles - car > DETOUR_OSRM_EXTRA_MI:
+            detour += leg.distance_miles - car
+    return detour
+
+
 class OsrmRoute:
     """The trip's OSRM route, fetched at most once (for split points or the fallback)."""
 
@@ -412,7 +442,12 @@ def route_trip(waypoints: list[LonLat], deadline: Deadline | None = None) -> Rou
         try:
             route = fetch_truck_route(waypoints, Deadline(budget), osrm)
             log.info("Valhalla truck route in %.2fs", time.monotonic() - started)
-            return route
+            detour = truck_detour_miles(route, waypoints, osrm)
+            if detour <= 0:
+                return route
+            log.warning("Valhalla truck route detours %.0f mi over OSRM; using the OSRM route", detour)
+            car = osrm()
+            return replace(car, detour_miles=round(detour, 1))
         except TruckRouteError as exc:
             log.warning("Valhalla failed after %.2fs, falling back to OSRM: %s", time.monotonic() - started, exc)
     return osrm()

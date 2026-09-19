@@ -3,6 +3,8 @@ import type { PlanRequest, PlanResponse } from '../types/api'
 import {
   decodePlanQuery,
   encodePlanQuery,
+  readTab,
+  withTab,
   readCachedPlan,
   requestFromPlan,
   withPlanQuery,
@@ -15,7 +17,7 @@ const request: PlanRequest = {
   dropoff_location: { query: 'Dallas TX' },
   current_cycle_used_hours: 10.5,
   start_time: '2026-09-21T06:00',
-  options: { include_inspections: true, rest_status: 'SB', fuel_stop_minutes: 30 },
+  options: { include_inspections: false, rest_status: 'SB', fuel_stop_minutes: 30 },
 }
 
 describe('encodePlanQuery', () => {
@@ -26,8 +28,9 @@ describe('encodePlanQuery', () => {
   })
 
   it('writes options that differ from the defaults', () => {
-    const q = encodePlanQuery({ ...request, options: { include_inspections: false, rest_status: 'OFF', fuel_stop_minutes: 45 } })
-    expect(q.endsWith('&insp=0&rest=OFF&fuel=45')).toBe(true)
+    const q = encodePlanQuery({ ...request, options: { include_inspections: true, rest_status: 'OFF', fuel_stop_minutes: 45 } })
+    expect(q.endsWith('&insp=1&rest=OFF&fuel=45')).toBe(true)
+    expect(decodePlanQuery(q)?.options?.include_inspections).toBe(true)
   })
 })
 
@@ -48,7 +51,7 @@ describe('decodePlanQuery', () => {
   it('keeps unrelated params working and ignores their order', () => {
     const decoded = decodePlanQuery(`?demo=1&start=2026-09-21T06:00&to=Dallas&pickup=Tulsa&from=Chicago&cycle=0&rest=OFF`)
     expect(decoded?.dropoff_location).toEqual({ query: 'Dallas' })
-    expect(decoded?.options).toEqual({ include_inspections: true, rest_status: 'OFF', fuel_stop_minutes: 30 })
+    expect(decoded?.options).toEqual({ include_inspections: false, rest_status: 'OFF', fuel_stop_minutes: 30 })
   })
 
   it.each([
@@ -77,13 +80,13 @@ describe('requestFromPlan', () => {
         dropoff_location: { label: 'Dallas, TX', lat: 32.7, lon: -96.8 },
         current_cycle_used_hours: 12,
         start_time: '2026-09-21T06:00',
-        options: { include_inspections: false, rest_status: 'SB', fuel_stop_minutes: 30 },
+        options: { include_inspections: true, rest_status: 'SB', fuel_stop_minutes: 30 },
         home_timezone: 'America/Chicago',
         home_tz_abbr: 'CDT',
       },
     } as PlanResponse
     expect(encodePlanQuery(requestFromPlan(plan))).toBe(
-      'from=Chicago,%20IL@41.8,-87.6&pickup=Tulsa,%20OK@36.1,-95.9&to=Dallas,%20TX@32.7,-96.8&cycle=12&start=2026-09-21T06:00&insp=0',
+      'from=Chicago,%20IL@41.8,-87.6&pickup=Tulsa,%20OK@36.1,-95.9&to=Dallas,%20TX@32.7,-96.8&cycle=12&start=2026-09-21T06:00&insp=1',
     )
   })
 })
@@ -125,5 +128,18 @@ describe('plan cache', () => {
   it('never throws without storage', () => {
     expect(() => writeCachedPlan('q', plan, null)).not.toThrow()
     expect(readCachedPlan('q', null)).toBeNull()
+  })
+})
+
+describe('results tab in the URL', () => {
+  it('defaults to the daily logs', () => {
+    expect(readTab('')).toBe('logs')
+    expect(readTab('?tab=bogus')).toBe('logs')
+    expect(readTab('?from=x&tab=directions')).toBe('directions')
+  })
+  it('writes only non-default tabs and keeps other keys', () => {
+    expect(withTab('?demo=1', 'itinerary')).toBe('?demo=1&tab=itinerary')
+    expect(withTab('?demo=1&tab=itinerary', 'logs')).toBe('?demo=1')
+    expect(withTab('?tab=directions', null)).toBe('')
   })
 })

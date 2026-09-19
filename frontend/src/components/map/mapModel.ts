@@ -99,6 +99,30 @@ export function routeFeatures(plan: PlanResponse): FeatureCollection<LineString,
   }
 }
 
+/** Stop markers closer than this on screen merge into one marker with a count badge. */
+export const CLUSTER_RADIUS_PX = 28
+
+/**
+ * Merges stop markers (never endpoint pins) that would overlap on screen at the current zoom.
+ * Greedy, most important stop first: each marker joins the first cluster whose anchor is within
+ * `radius` px, so a cluster sits on its most important stop. `project` maps lng/lat to screen px.
+ */
+export function clusterPlaces(
+  places: readonly MapPlace[],
+  project: (lngLat: LngLat) => [number, number],
+  radius = CLUSTER_RADIUS_PX,
+): MapPlace[] {
+  const stops = places.filter((p) => !p.role).sort((a, b) => byPriority(a.stops[0], b.stops[0]))
+  const clusters: { at: [number, number]; place: MapPlace }[] = []
+  for (const place of stops) {
+    const at = project(place.lngLat)
+    const hit = clusters.find((c) => Math.hypot(c.at[0] - at[0], c.at[1] - at[1]) < radius)
+    if (hit) hit.place = { ...hit.place, stops: [...hit.place.stops, ...place.stops].sort(byPriority) }
+    else clusters.push({ at, place })
+  }
+  return [...clusters.map((c) => c.place), ...places.filter((p) => p.role)]
+}
+
 /** Endpoint pins are 34x44 px, anchored at the tip; stop markers are ~30 px circles. */
 const PIN = { halfWidth: 17, height: 44 }
 const STOP_RADIUS = 16

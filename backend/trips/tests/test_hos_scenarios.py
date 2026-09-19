@@ -54,7 +54,7 @@ def check(trip_legs, cycle, options, expected, start=START):
 def test_short_trip_same_day():
     """50 mi to pickup, 200 mi to drop-off; everything fits in one duty period and one day."""
     events, plan = check(
-        legs(50, 60, 200, 240), 10, PlanOptions(),
+        legs(50, 60, 200, 240), 10, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("drive", 30, 90), ("pickup", 90, 150),
             ("drive", 150, 390), ("dropoff", 390, 450), ("post_trip", 450, 465),
@@ -93,7 +93,7 @@ def test_short_trip_same_day():
 def test_exactly_eleven_hours_of_driving():
     """660 mi at 60 mph = 11 h of driving: one 30-min break at 8 h, no 10-h rest needed."""
     check(
-        legs(0, 0, 660, 660), 0, PlanOptions(),
+        legs(0, 0, 660, 660), 0, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("pickup", 30, 90), ("drive", 90, 570), ("break", 570, 600),
             ("drive", 600, 780), ("dropoff", 780, 840), ("post_trip", 840, 855),
@@ -104,7 +104,7 @@ def test_exactly_eleven_hours_of_driving():
 def test_eleven_hour_limit_forces_rest():
     """700 mi: 11 h of driving ends at mile 660; post-trip, 10 h in the sleeper, then 40 more minutes."""
     events, plan = check(
-        legs(0, 0, 700, 700), 0, PlanOptions(),
+        legs(0, 0, 700, 700), 0, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("pickup", 30, 90), ("drive", 90, 570), ("break", 570, 600),
             ("drive", 600, 780), ("post_trip", 780, 795), ("rest", 795, 1395),
@@ -142,7 +142,7 @@ def test_fourteen_hour_window_limits_driving():
     also counts as the break. The window then closes as the pickup ends: pickup is still
     allowed (on duty, not driving), driving is not.
     """
-    opts = PlanOptions(fuel_stop_minutes=150)
+    opts = PlanOptions(include_inspections=True, fuel_stop_minutes=150)
     events, _ = check(
         legs(1200, 600, 60, 60), 0, opts,
         [
@@ -168,7 +168,7 @@ def test_restart_when_cycle_runs_out():
     trip now restarts at the start, see test_restart_at_the_start_when_it_arrives_earlier.)
     """
     events, plan = check(
-        legs(0, 0, 840, 840), 65, PlanOptions(),
+        legs(0, 0, 840, 840), 65, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("pickup", 30, 90), ("drive", 90, 285), ("post_trip", 285, 300),
             ("restart", 300, 2340), ("pre_trip", 2340, 2370), ("drive", 2370, 2850),
@@ -203,14 +203,14 @@ def test_restart_at_the_start_when_it_arrives_earlier():
     (arrival at minute 2,850). Restarting first counts the 6 h off since midnight (28 h),
     and all 10 h of driving then fit in one duty period: arrival at minute 2,475."""
     _, plan = check(
-        legs(0, 0, 600, 600), 65, PlanOptions(),
+        legs(0, 0, 600, 600), 65, PlanOptions(include_inspections=True),
         [
             ("restart", 0, 1680), ("pre_trip", 1680, 1710), ("pickup", 1710, 1770),
             ("drive", 1770, 2250), ("break", 2250, 2280), ("drive", 2280, 2400),
             ("dropoff", 2400, 2460), ("post_trip", 2460, 2475),
         ],
     )
-    greedy = _Planner(build_leg_drives(legs(0, 0, 600, 600)), 65 * 60, PlanOptions(), 360).run()
+    greedy = _Planner(build_leg_drives(legs(0, 0, 600, 600)), 65 * 60, PlanOptions(include_inspections=True), 360).run()
     assert kinds(greedy)[:5] == ["pre_trip", "pickup", "drive", "post_trip", "restart"]
     assert greedy[-1].end == 2850
     assert plan["summary"]["end_time"] == "2026-09-22T23:15"
@@ -226,7 +226,7 @@ def test_cycle_nearly_or_fully_used_at_start(cycle):
     """Less than 1 h of cycle left: restart before opening the first duty period. The 6 h
     off duty since midnight count toward it, so it lasts 28 h (to 10:00 on day 2)."""
     _, plan = check(
-        legs(0, 0, 100, 120), cycle, PlanOptions(),
+        legs(0, 0, 100, 120), cycle, PlanOptions(include_inspections=True),
         [
             ("restart", 0, 1680), ("pre_trip", 1680, 1710), ("pickup", 1710, 1770),
             ("drive", 1770, 1890), ("dropoff", 1890, 1950), ("post_trip", 1950, 1965),
@@ -241,7 +241,7 @@ def test_cycle_69_restarts_before_working():
     """69 h used: pre-trip, pickup and post-trip alone would pass 70 h before any driving,
     so the restart comes first rather than after an hour of work (recap stays <= 70)."""
     _, plan = check(
-        legs(0, 0, 100, 120), 69, PlanOptions(),
+        legs(0, 0, 100, 120), 69, PlanOptions(include_inspections=True),
         [
             ("restart", 0, 1680), ("pre_trip", 1680, 1710), ("pickup", 1710, 1770),
             ("drive", 1770, 1890), ("dropoff", 1890, 1950), ("post_trip", 1950, 1965),
@@ -255,7 +255,7 @@ def test_current_equals_pickup(leg0_miles):
     """A (near) zero-length first leg is not driven; the pickup happens right after the pre-trip."""
     trip_legs = [leg(B, B, leg0_miles, leg0_miles), leg(B, C, 120, 120)]
     events, plan = check(
-        trip_legs, 0, PlanOptions(),
+        trip_legs, 0, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("pickup", 30, 90), ("drive", 90, 210),
             ("dropoff", 210, 270), ("post_trip", 270, 285),
@@ -270,7 +270,7 @@ def test_current_equals_pickup(leg0_miles):
 def test_fuel_point_coincides_with_leg_end():
     """Leg 0 is exactly 1,000 mi: no fuel stop on the road; the truck fuels at the shipper."""
     events, _ = check(
-        legs(1000, 1000, 100, 100), 0, PlanOptions(),
+        legs(1000, 1000, 100, 100), 0, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("drive", 30, 510), ("break", 510, 540), ("drive", 540, 720),
             ("post_trip", 720, 735), ("rest", 735, 1335), ("pre_trip", 1335, 1365),
@@ -316,7 +316,7 @@ def test_multi_day_2500_miles():
     The second fuel stop falls due 20 mi after the day-3 rest, so it is taken at that stop.
     """
     events, plan = check(
-        legs(100, 100, 2400, 2400), 0, PlanOptions(),
+        legs(100, 100, 2400, 2400), 0, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("drive", 30, 130), ("pickup", 130, 190),
             ("drive", 190, 670), ("break", 670, 700), ("drive", 700, 780),
@@ -355,13 +355,13 @@ def test_invalid_inputs():
     trip = legs(10, 10, 10, 10)
     for prior in (-1, 2040, 1.5):
         with pytest.raises(ValueError):
-            plan_events(trip, 0, PlanOptions(), prior_off_duty_minutes=prior)
+            plan_events(trip, 0, PlanOptions(include_inspections=True), prior_off_duty_minutes=prior)
     with pytest.raises(ValueError):
-        plan_events(trip, 70.5, PlanOptions())
+        plan_events(trip, 70.5, PlanOptions(include_inspections=True))
     with pytest.raises(ValueError):
-        plan_events(trip, -1, PlanOptions())
+        plan_events(trip, -1, PlanOptions(include_inspections=True))
     with pytest.raises(ValueError):
-        plan_events(trip[:1], 0, PlanOptions())
+        plan_events(trip[:1], 0, PlanOptions(include_inspections=True))
     with pytest.raises(ValueError):
         PlanOptions(rest_status="ON")
     with pytest.raises(ValueError):
@@ -395,7 +395,7 @@ def test_rest_suffices_when_remaining_drive_fits_in_cycle():
 
 def test_no_rest_immediately_followed_by_restart():
     """56.3 h used with inspections: the post-trip is counted before choosing rest vs restart."""
-    events = plan_events([straight(180), straight(500)], 56.3, PlanOptions())
+    events = plan_events([straight(180), straight(500)], 56.3, PlanOptions(include_inspections=True))
     assert "restart" not in kinds(events)
     assert shape(events)[-5:] == [
         ("rest", 765, 1365), ("pre_trip", 1365, 1395), ("drive", 1395, 1415),
@@ -414,7 +414,7 @@ def test_restart_before_pickup_keeps_recap_within_70():
     """
     trip = [LegProfile.straight((-90, 40), (-89, 40), 165, 180), LegProfile.straight((-89, 40), (-80, 40), 600, 600)]
     _, plan = check(
-        trip, 66, PlanOptions(),
+        trip, 66, PlanOptions(include_inspections=True),
         [
             ("pre_trip", 0, 30), ("drive", 30, 210), ("post_trip", 210, 225), ("restart", 225, 2265),
             ("pre_trip", 2265, 2295), ("pickup", 2295, 2355), ("drive", 2355, 2835), ("break", 2835, 2865),
@@ -426,7 +426,7 @@ def test_restart_before_pickup_keeps_recap_within_70():
 
 def test_no_break_when_little_driving_would_follow():
     """The 8-h break is skipped when the 14-h window or cycle would allow < 15 min after it."""
-    events = plan_events([straight(1644, 47.3), straight(1830, 47.3)], 61.3, PlanOptions())
+    events = plan_events([straight(1644, 47.3), straight(1830, 47.3)], 61.3, PlanOptions(include_inspections=True))
     assert audit_events(events, 61.3) == []
     assert "break" in kinds(events)
     for ev, nxt, after in zip(events, events[1:], events[2:], strict=False):
@@ -486,7 +486,7 @@ def test_restart_replaces_a_rest_when_the_rest_of_the_trip_fits_a_fresh_cycle():
     """
     LA, PHX, NYC = (-118.24, 34.05), (-112.07, 33.45), (-74.0, 40.71)
     trip = [st55(LA, PHX, 373), st55(PHX, NYC, 2411)]
-    opts = PlanOptions()
+    opts = PlanOptions(include_inspections=True)
     greedy = greedy_events(trip, 30, opts, prior=480)
     assert [k for k in kinds(greedy) if k in ("rest", "restart")] == ["rest", "rest", "rest", "restart", "rest"]
     restart = kinds(greedy).index("restart")
@@ -511,18 +511,18 @@ def test_no_optional_restart_when_the_rest_of_the_trip_exceeds_a_fresh_cycle():
     remain, more than a fresh cycle holds, so no early restart is offered; the restart waits
     until the cycle runs out."""
     trip = [straight(0), straight(4500)]
-    planner = _Planner(build_leg_drives(trip), 50 * 60, PlanOptions())
+    planner = _Planner(build_leg_drives(trip), 50 * 60, PlanOptions(include_inspections=True))
     events = planner.run()
     assert planner.restart_options == 0
     assert [(e.kind, e.start) for e in events if e.kind in ("rest", "restart")][:2] == [("rest", 795), ("restart", 1830)]
-    assert shape(plan_events(trip, 50, PlanOptions())) == shape(events)
+    assert shape(plan_events(trip, 50, PlanOptions(include_inspections=True))) == shape(events)
 
 
 def test_greedy_plan_kept_when_an_early_restart_does_not_arrive_sooner():
     """10 h used, 3,050 mi at 55 mph: early restarts are offered at five rests, but none
     arrives sooner than using up the cycle first, so the greedy plan is kept (also on a tie)."""
     trip = [st55((-95, 37), (-95, 37), 0), st55((-95, 37), (-80, 37), 3050)]
-    drives, opts = build_leg_drives(trip), PlanOptions()
+    drives, opts = build_leg_drives(trip), PlanOptions(include_inspections=True)
     planner = _Planner(drives, 10 * 60, opts)
     greedy = planner.run()
     assert planner.restart_options == 5
@@ -536,7 +536,7 @@ def test_restart_at_the_start_counts_the_time_off_since_midnight():
     ends 34 h after midnight (10:00 on day 2), not 34 h after the start (18:00)."""
     trip = legs(0, 0, 100, 120)
     events, plan = check(
-        trip, 70, PlanOptions(),
+        trip, 70, PlanOptions(include_inspections=True),
         [
             ("restart", 0, 1560), ("pre_trip", 1560, 1590), ("pickup", 1590, 1650),
             ("drive", 1650, 1770), ("dropoff", 1770, 1830), ("post_trip", 1830, 1845),
@@ -560,7 +560,7 @@ def test_restart_at_the_start_counts_the_time_off_since_midnight():
         "(assumes none of the hours already used roll off during the trip)."
     ]
     # A midnight start has no time off to count.
-    assert plan_events(trip, 70, PlanOptions())[0].duration == 2040
+    assert plan_events(trip, 70, PlanOptions(include_inspections=True))[0].duration == 2040
 
 
 def test_fuel_before_the_rest_when_the_next_period_needs_it_early():
@@ -597,7 +597,7 @@ def test_fuel_right_after_a_restart_when_the_cycle_left_no_room_before_it():
     room to fuel before the restart. The truck fuels after the pre-trip, before driving off,
     instead of stopping again 15 min after the restart."""
     trip = [st55((-95, 37), (-95, 37), 0), st55((-95, 37), (-80, 37), 3050)]
-    events = plan_events(trip, 10, PlanOptions())
+    events = plan_events(trip, 10, PlanOptions(include_inspections=True))
     assert audit_events(events, 10) == []
     assert stops(events)[-6:] == [
         ("post_trip", 6075, 6090), ("restart", 6090, 8130), ("pre_trip", 8130, 8160),
@@ -646,7 +646,7 @@ def test_warning_durations_use_the_ui_format():
 def test_no_roll_off_caveat_when_the_trip_alone_exceeds_the_cycle():
     """50 h used but the trip's own work passes 70 h: a restart is needed with or without
     roll-off, so its warning has no caveat."""
-    plan = build_plan([straight(0), straight(4500)], datetime(2026, 9, 21), 50, PlanOptions(), namer)
+    plan = build_plan([straight(0), straight(4500)], datetime(2026, 9, 21), 50, PlanOptions(include_inspections=True), namer)
     assert plan["warnings"] == [
         "34-hour restart required on day 2: the 70-hour cycle is used up and driving remains."
     ]

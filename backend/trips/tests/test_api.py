@@ -97,7 +97,7 @@ def test_plan_options_default(client, fake_planner, options):
     else:
         body["options"] = options
     assert post(client, body).status_code == 200
-    assert fake_planner["data"]["options"] == {"include_inspections": True, "rest_status": "SB", "fuel_stop_minutes": 30}
+    assert fake_planner["data"]["options"] == {"include_inspections": False, "rest_status": "SB", "fuel_stop_minutes": 30}
 
 
 @pytest.mark.parametrize("cycle", [0, 70, 69.75, "35"])

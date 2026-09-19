@@ -17,6 +17,7 @@ import {
   bracketPath,
   buildDutyPath,
   restartState,
+  splitShippingDoc,
   layoutRemarks,
   leaderPath,
   minutesByStatus,
@@ -35,6 +36,8 @@ export interface LogSheetProps {
   tripLabel?: string
   /** Printed under REMARKS, e.g. the two-duty-period driving note (see lib/dutyPeriods). */
   note?: string | null
+  /** Home-terminal time zone the grid is drawn in, e.g. "CDT"; printed with the time-standard line. */
+  tzAbbr?: string
   /** React 19 ref-as-prop: the root <svg>, used for SVG/PNG export. */
   ref?: Ref<SVGSVGElement>
   className?: string
@@ -171,7 +174,7 @@ function Ruler({ top, bottom }: { top: number; bottom: number }) {
 
 // ---------- The sheet ----------
 
-export function LogSheet({ log, header, dayCount, tripLabel, note, ref, className, tint = false }: LogSheetProps) {
+export function LogSheet({ log, header, dayCount, tripLabel, note, tzAbbr, ref, className, tint = false }: LogSheetProps) {
   const { month, day, year } = splitDate(log.date)
   // Row totals in whole minutes straight from the drawn segments, so what is printed is
   // exactly what is drawn and the rows always add up to 24:00.
@@ -261,8 +264,21 @@ export function LogSheet({ log, header, dayCount, tripLabel, note, ref, classNam
           I certify that these entries are true and correct
         </text>
         <Field x1={40} x2={520} y={196} label="(NAME OF CARRIER OR CARRIERS)" value={header.carrier_name} size={16} />
-        {/* Left blank for a wet signature: the app never signs on the driver's behalf. */}
+        {/* Signed in the driver's name, as on the FMCSA sample log (blank when the name is cleared). */}
         <Field x1={560} x2={830} y={196} label="(DRIVER'S SIGNATURE IN FULL)" />
+        {header.driver_name.trim() ? (
+          <text
+            x={572}
+            y={189}
+            fontFamily={GOV_FONT}
+            fontSize={21}
+            fontStyle="italic"
+            fill={INK}
+            transform="rotate(-3 572 189)"
+          >
+            {truncate(header.driver_name.trim(), 26)}
+          </text>
+        ) : null}
         <Field x1={846} x2={GRID.totalsRight} y={196} label="(DRIVER NAME, PRINTED)" value={header.driver_name} size={14} />
 
         {/* Addresses and co-driver */}
@@ -437,7 +453,11 @@ export function LogSheet({ log, header, dayCount, tripLabel, note, ref, classNam
         <text x={490} y={706} fontFamily={FORM_FONT} fontSize={10} fontStyle="italic" fill={FAINT}>or</text>
         <Field x1={512} x2={GRID.totalsRight} y={710} label="SHIPPER & COMMODITY" value={shipping.shipper} size={14} />
         <text x={SHEET.width / 2} y={738} textAnchor="middle" fontFamily={FORM_FONT} fontSize={8.5} fontWeight={700} fill={LINE}>
-          Enter name of place you reported and where released from work and when and where each change of duty occurred. Use time standard of home terminal.
+          Enter name of place you reported and where released from work and when and where each change of duty occurred. Use time standard of home terminal
+          {tzAbbr ? (
+            <tspan fill={INK} fontFamily={INK_FONT} fontSize={9.5}>{` (times shown: ${tzAbbr})`}</tspan>
+          ) : null}
+          .
         </text>
       </g>
 
@@ -537,19 +557,6 @@ function RecapValue({ x, value }: { x: number; value: string }) {
       </text>
     </g>
   )
-}
-
-/**
- * The header has one free-text shipping field. A code-like value (no spaces or
- * mostly digits, e.g. "BOL-10442") goes on the manifest line; prose such as
- * "Acme Foods, frozen produce" goes on the shipper & commodity line.
- */
-function splitShippingDoc(raw: string): { manifest: string; shipper: string } {
-  const value = raw.trim()
-  if (!value) return { manifest: '', shipper: '' }
-  const digits = value.replace(/\D/g, '').length
-  const looksLikeNumber = !/\s/.test(value) || digits / value.length >= 0.5
-  return looksLikeNumber ? { manifest: value, shipper: '' } : { manifest: '', shipper: value }
 }
 
 export default LogSheet

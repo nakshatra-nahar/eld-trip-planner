@@ -1,6 +1,6 @@
 import { ArrowRight, Clock, Globe2, MoonStar, Scale } from 'lucide-react'
 import { useMemo } from 'react'
-import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND } from '../../lib/duty'
+import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND, stopReason } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import { formatClock, formatDay, formatDayLong, formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import { localTimeNote, outsideDockHours } from '../../lib/localTime'
@@ -137,6 +137,7 @@ function ItineraryRow({
   const status = DUTY_STATUS[e.status]
   const Icon = kind.icon
   const drive = e.kind === 'drive'
+  const reason = drive ? undefined : stopReason(e)
   const crossesMidnight = e.start.slice(0, 10) !== e.end.slice(0, 10)
   const local = drive ? null : localTimeNote(e.start, e.local_start, e.start_tz_abbr)
   const dock = (e.kind === 'pickup' || e.kind === 'dropoff') && outsideDockHours(e.local_start ?? e.start)
@@ -185,6 +186,7 @@ function ItineraryRow({
           <span className="text-sm font-semibold text-ink-900">{e.label}</span>
           <StatusChip status={e.status} />
           <span className="tabular font-mono text-xs text-ink-500">{formatDuration(e.duration_hours)}</span>
+          {reason && <span className="basis-full text-xs leading-snug text-ink-500">{reason}</span>}
         </div>
         <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] text-ink-600 xl:mt-0">
           {drive ? (

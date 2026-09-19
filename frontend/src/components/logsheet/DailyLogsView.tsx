@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronDown, Download, FileCode, ImageDown, Layers, Printer } from 'lucide-react'
 import { formatDuration } from '../../lib/format'
+import { scrollBehavior } from '../../lib/motion'
 import type { DailyLog, DutyStatus, LogHeaderDetails } from '../../types/api'
 import { LogSheet } from './LogSheet'
 import { downloadPng, downloadSvg } from './exporters'
@@ -16,11 +17,13 @@ export interface DailyLogsViewProps {
   tripLabel?: string
   /** Per-date note printed on the sheet (see lib/dutyPeriods). */
   notes?: ReadonlyMap<string, string | null>
+  /** Home-terminal time zone abbreviation the sheets are drawn in, e.g. "CDT". */
+  tzAbbr?: string
 }
 
 const STATUS_SHORT: Record<DutyStatus, string> = { OFF: 'Off duty', SB: 'Sleeper', D: 'Driving', ON: 'On duty' }
 
-export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewProps) {
+export function DailyLogsView({ logs, header, tripLabel, notes, tzAbbr }: DailyLogsViewProps) {
   const [selected, setSelected] = useState(0)
   const [showAll, setShowAll] = useState(false)
   const [busy, setBusy] = useState<null | 'png'>(null)
@@ -30,6 +33,7 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
   const menuRef = useRef<HTMLDetailsElement>(null)
   const sheetRefs = useRef(new Map<number, SVGSVGElement>())
   const pillRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const pillsRef = useRef<HTMLDivElement>(null)
 
   const count = logs.length
   const index = Math.min(selected, Math.max(0, count - 1))
@@ -59,6 +63,41 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
       document.removeEventListener('keydown', close)
     }
   }, [])
+
+  // Day pills that overflow (phones, long trips) fade at the right edge, so the hidden days
+  // read as "scroll for more", and the fade drops once the list is scrolled to its end.
+  useEffect(() => {
+    const el = pillsRef.current
+    if (!el) return
+    const update = () => {
+      const overflow = el.scrollWidth - el.clientWidth > 1
+      const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 1
+      if (overflow && !atEnd) el.dataset.overflow = ''
+      else delete el.dataset.overflow
+    }
+    update()
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    ro?.observe(el)
+    el.addEventListener('scroll', update, { passive: true })
+    return () => {
+      ro?.disconnect()
+      el.removeEventListener('scroll', update)
+    }
+  }, [count])
+
+  // Keep the selected day's pill visible inside the scrolling pill list. Scrolls only the list
+  // (scrollIntoView would also scroll the page to a list that is below the fold).
+  useEffect(() => {
+    const list = pillsRef.current
+    const pill = pillRefs.current[index]
+    if (!list || !pill) return
+    const left = pill.offsetLeft - list.offsetLeft
+    const right = left + pill.offsetWidth
+    if (left < list.scrollLeft) list.scrollTo({ left: left - 4, behavior: scrollBehavior() })
+    else if (right > list.scrollLeft + list.clientWidth) {
+      list.scrollTo({ left: right - list.clientWidth + 4, behavior: scrollBehavior() })
+    }
+  }, [index])
 
   if (!current) {
     return (
@@ -100,7 +139,7 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
     setSelected(i)
     if (focus) pillRefs.current[i]?.focus()
     if (showAll) {
-      sheetRefs.current.get(i)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      sheetRefs.current.get(i)?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' })
     }
   }
 
@@ -127,7 +166,7 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
     <section className="ls-view" aria-label="Driver's daily logs">
       <div className="ls-toolbar">
         <div className="ls-days">
-          <div className="ls-pills" role="tablist" aria-label="Log sheet day" onKeyDown={onPillKey}>
+          <div ref={pillsRef} className="ls-pills" role="tablist" aria-label="Log sheet day" onKeyDown={onPillKey}>
             {logs.map((lg, i) => {
               const active = i === index
               return (
@@ -221,7 +260,9 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
         <button type="button" aria-pressed={!fit} onClick={() => setFit(false)}>
           Actual size
         </button>
-        {!fit ? <p className="ls-swipe-hint">Swipe sideways to read the full sheet.</p> : null}
+        <p className="ls-swipe-hint">
+          {fit ? 'Tip: tap Actual size or turn your phone sideways to read the sheet.' : 'Swipe sideways to read the full sheet.'}
+        </p>
       </div>
 
       <div className="ls-sheets" data-fit={fit || undefined}>
@@ -234,6 +275,7 @@ export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewP
               dayCount={count}
               tripLabel={tripLabel}
               note={notes?.get(lg.date)}
+              tzAbbr={tzAbbr}
               tint
             />
           </figure>

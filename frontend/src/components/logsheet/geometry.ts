@@ -196,8 +196,13 @@ export const REMARK_MERGE_MINUTES = 60
 export interface RemarkGroup {
   start_minute: number
   end_minute: number
-  /** City/state only, one form for the whole sheet (the FMCSA remark needs no road). */
+  /**
+   * Where it happened, as FMCSA p.17 asks: the city and state, and outside a city the highway
+   * too ("I-70 near Chapman, KS"). One form for the whole group.
+   */
   location: string
+  /** City/state key the group was merged on ("Chapman, KS"). */
+  place: string
   /** Activities in time order, in paper-log shorthand, e.g. "Post-trip / 10-h rest (SB)". */
   note: string
   /** The remarks this label covers; each still gets its own bracket. */
@@ -215,16 +220,19 @@ export function groupRemarks(remarks: readonly LogRemark[]): RemarkGroup[] {
     .sort((a, b) => a.start_minute - b.start_minute || a.end_minute - b.end_minute)
   const groups: RemarkGroup[] = []
   for (const rm of sorted) {
-    const location = placeLabel(rm.location, { withRoad: false })
+    const place = placeLabel(rm.location, { withRoad: false })
+    const location = placeLabel(rm.location)
     const note = shortNote(rm.note, rm.status)
     const prev = groups[groups.length - 1]
     const last = prev?.members[prev.members.length - 1]
-    if (prev && last && prev.location === location && rm.start_minute - last.start_minute <= REMARK_MERGE_MINUTES) {
+    if (prev && last && prev.place === place && rm.start_minute - last.start_minute <= REMARK_MERGE_MINUTES) {
       prev.members.push(rm)
       prev.end_minute = Math.max(prev.end_minute, rm.end_minute)
+      // "Joplin, MO" then "I-44 near Joplin, MO": keep the form that names the highway.
+      if (location.length > prev.location.length) prev.location = location
       if (note && !prev.note.split(' / ').includes(note)) prev.note = prev.note ? `${prev.note} / ${note}` : note
     } else {
-      groups.push({ start_minute: rm.start_minute, end_minute: rm.end_minute, location, note, members: [rm] })
+      groups.push({ start_minute: rm.start_minute, end_minute: rm.end_minute, location, place, note, members: [rm] })
     }
   }
   return groups
@@ -446,4 +454,20 @@ export function recapValues(log: Pick<DailyLog, 'segments' | 'cycle_hours_used'>
   const rounded = roundedMinutesByStatus(minutesByStatus(log.segments))
   const used = Math.max(0, log.cycle_hours_used)
   return { onDutyTodayMinutes: rounded.D + rounded.ON, a: used, b: Math.max(0, 70 - used), c: used }
+}
+
+/**
+ * The header has one free-text shipping field. "Pro No. 101601 · General freight" splits at
+ * the "·" into the manifest line and the shipper & commodity line. Otherwise a code-like
+ * value (no spaces or mostly digits, e.g. "BOL-10442") goes on the manifest line and prose
+ * such as "Acme Foods, frozen produce" on the shipper & commodity line.
+ */
+export function splitShippingDoc(raw: string): { manifest: string; shipper: string } {
+  const value = raw.trim()
+  if (!value) return { manifest: '', shipper: '' }
+  const parts = value.split('·').map((p) => p.trim())
+  if (parts.length === 2 && parts[0] && parts[1]) return { manifest: parts[0], shipper: parts[1] }
+  const digits = value.replace(/\D/g, '').length
+  const looksLikeNumber = !/\s/.test(value) || digits / value.length >= 0.5
+  return looksLikeNumber ? { manifest: value, shipper: '' } : { manifest: '', shipper: value }
 }

@@ -5,7 +5,7 @@
 import type { LocationInput, PlanOptions, PlanRequest, PlanResponse } from '../types/api'
 import { isValidWallTime } from './format'
 
-const DEFAULT_OPTIONS: PlanOptions = { include_inspections: true, rest_status: 'SB', fuel_stop_minutes: 30 }
+const DEFAULT_OPTIONS: PlanOptions = { include_inspections: false, rest_status: 'SB', fuel_stop_minutes: 30 }
 
 /** Query keys owned by the plan; anything else in the URL (e.g. ?demo=) is left alone. */
 export const PLAN_KEYS = ['from', 'pickup', 'to', 'cycle', 'start', 'insp', 'rest', 'fuel'] as const
@@ -45,7 +45,7 @@ export function encodePlanQuery(request: PlanRequest): string {
     ['cycle', String(request.current_cycle_used_hours)],
     ['start', request.start_time],
   ]
-  if (!options.include_inspections) parts.push(['insp', '0'])
+  if (options.include_inspections) parts.push(['insp', '1'])
   if (options.rest_status !== DEFAULT_OPTIONS.rest_status) parts.push(['rest', options.rest_status])
   if (options.fuel_stop_minutes !== DEFAULT_OPTIONS.fuel_stop_minutes) parts.push(['fuel', String(options.fuel_stop_minutes)])
   return parts.map(([k, v]) => `${k}=${enc(v)}`).join('&')
@@ -71,7 +71,7 @@ export function decodePlanQuery(search: string): PlanRequest | null {
     current_cycle_used_hours: cycle,
     start_time: start,
     options: {
-      include_inspections: params.get('insp') !== '0',
+      include_inspections: params.get('insp') === '1',
       rest_status: params.get('rest') === 'OFF' ? 'OFF' : 'SB',
       fuel_stop_minutes: Number.isInteger(fuel) ? fuel : DEFAULT_OPTIONS.fuel_stop_minutes,
     },
@@ -102,9 +102,32 @@ export function withPlanQuery(search: string, planQuery: string | null): string 
   return query ? `?${query}` : ''
 }
 
+// ---------- Results tab ----------
+
+export const RESULTS_TABS = ['logs', 'itinerary', 'directions'] as const
+export type ResultsTab = (typeof RESULTS_TABS)[number]
+/** The tab a plan opens on: the daily logs are the key deliverable. */
+export const DEFAULT_TAB: ResultsTab = 'logs'
+
+/** The results tab named by `?tab=`, or the default. */
+export function readTab(search: string): ResultsTab {
+  const tab = new URLSearchParams(search).get('tab')
+  return (RESULTS_TABS as readonly string[]).includes(tab ?? '') ? (tab as ResultsTab) : DEFAULT_TAB
+}
+
+/** `search` with `?tab=` set (omitted for the default tab or null); other keys are kept. */
+export function withTab(search: string, tab: ResultsTab | null): string {
+  const kept = search
+    .replace(/^\?/, '')
+    .split('&')
+    .filter((part) => part && decodeURIComponent(part.split('=')[0]) !== 'tab')
+  if (tab && tab !== DEFAULT_TAB) kept.push(`tab=${tab}`)
+  return kept.length ? `?${kept.join('&')}` : ''
+}
+
 // ---------- Response cache ----------
 
-const CACHE_PREFIX = 'routelog.plan.v1:'
+const CACHE_PREFIX = 'routelog.plan.v2:'
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
 

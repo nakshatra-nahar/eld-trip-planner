@@ -93,7 +93,7 @@ def plan():
     leg0 = LegProfile(coords0, [5.0] * 10, [6.0] * 10, [RouteStep(0, 20, "Main St"), RouteStep(20, 50, "I 55")])
     coords1 = [(-87.9 + i * 0.129, 41.5 - i * 0.015) for i in range(101)]
     leg1 = LegProfile(coords1, [15.0] * 100, [15 / 58 * 60] * 100, [RouteStep(0, 1500, "I 80")])
-    return build_plan([leg0, leg1], datetime(2026, 9, 21, 6, 0), 62.5, PlanOptions(), namer)
+    return build_plan([leg0, leg1], datetime(2026, 9, 21, 6, 0), 62.5, PlanOptions(include_inspections=True), namer)
 
 
 def test_plan_has_exactly_the_engine_keys(plan):

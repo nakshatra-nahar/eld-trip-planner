@@ -55,9 +55,15 @@ describe('groupRemarks', () => {
       remark(465, 1065, 'I 44 near Joplin, MO', '10-hour rest', 'SB'),
     ])
     expect(groups).toHaveLength(1)
-    expect(groups[0].location).toBe('Joplin, MO')
+    expect(groups[0].location).toBe('I-44 near Joplin, MO')
+    expect(groups[0].place).toBe('Joplin, MO')
     expect(groups[0].note).toBe('Post-trip / 10-h rest (SB)')
     expect(groups[0].members).toHaveLength(2)
+  })
+
+  it('names the highway for a stop outside a city (FMCSA p.17)', () => {
+    const [g] = groupRemarks([remark(600, 1200, 'I 70 near Chapman, KS', '10-hour rest', 'SB')])
+    expect(g.location).toBe('I-70 near Chapman, KS')
   })
 
   it('keeps remarks at different places apart', () => {

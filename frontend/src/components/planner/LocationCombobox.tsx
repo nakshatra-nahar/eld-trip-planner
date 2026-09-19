@@ -56,7 +56,9 @@ export function LocationCombobox({ label, placeholder, value, onChange, client, 
       .geocode(query, controller.signal)
       .then((res) => {
         setLookup({ query, results: res.results, failed: false })
-        setActive(res.results.length ? 0 : -1)
+        // Nothing is pre-highlighted, so ArrowDown lands on the first suggestion (Enter alone
+        // still picks it, see onKeyDown).
+        setActive(-1)
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return
@@ -75,14 +77,16 @@ export function LocationCombobox({ label, placeholder, value, onChange, client, 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       if (!open) setOpen(true)
-      else if (results.length) setActive((i) => (i + 1) % results.length)
+      else if (results.length) setActive((i) => (i < 0 ? 0 : (i + 1) % results.length))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       if (results.length) setActive((i) => (i <= 0 ? results.length - 1 : i - 1))
     } else if (e.key === 'Enter') {
-      if (open && active >= 0 && results[active] && !value.selected) {
+      // Enter with nothing highlighted takes the top suggestion.
+      const idx = active >= 0 ? active : results.length ? 0 : -1
+      if (open && idx >= 0 && results[idx] && !value.selected) {
         e.preventDefault()
-        choose(results[active])
+        choose(results[idx])
       }
     } else if (e.key === 'Escape') {
       if (open) {
@@ -124,7 +128,11 @@ export function LocationCombobox({ label, placeholder, value, onChange, client, 
             onChange({ text: e.target.value, selected: null })
             setOpen(true)
           }}
-          onFocus={() => setOpen(true)}
+          // A place the server already rejected shows its error inline; reopening the popover on
+          // focus would repeat it and cover the next field. Typing or ArrowDown reopens it.
+          onFocus={() => {
+            if (!error) setOpen(true)
+          }}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
           className={cn(inputClass, action ? 'pr-[5.5rem]' : 'pr-11', value.selected && 'font-medium')}
@@ -183,6 +191,11 @@ export function LocationCombobox({ label, placeholder, value, onChange, client, 
                 </span>
                 <span className="block truncate text-xs text-ink-500">{r.label}</span>
               </span>
+              {i === 0 && active < 0 && (
+                <kbd aria-hidden className="ml-auto shrink-0 rounded border border-ink-200 px-1.5 font-sans text-[10px] font-medium text-ink-500">
+                  Enter
+                </kbd>
+              )}
             </li>
           ))}
         </ul>

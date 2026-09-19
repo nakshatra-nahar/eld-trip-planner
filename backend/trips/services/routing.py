@@ -52,6 +52,7 @@ class RouteResult:
     provider: str  # e.g. "OSRM (router.project-osrm.org)"
     snap_miles: list[float] = field(default_factory=list)  # input -> snapped waypoint distance
     truck_routing: bool = False  # True when every leg used a truck profile (Valhalla)
+    detour_miles: float = 0.0  # > 0: the truck route detoured this far, so the car route is used (valhalla.py)
 
 
 def _truck_minutes(dist_m: float, dur_s: float) -> float:

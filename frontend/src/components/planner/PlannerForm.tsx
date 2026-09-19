@@ -3,6 +3,7 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import type { ApiClient } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { ROLE_ICON } from '../../lib/duty'
+import { nextMorning } from '../../lib/format'
 import type { LogHeaderDetails, PlanRequest } from '../../types/api'
 import { Button, Disclosure, Field, SegmentedControl, Toggle } from '../ui'
 import { CycleInput } from './CycleInput'
@@ -18,6 +19,8 @@ interface PlannerFormProps {
   onValuesChange: (update: (prev: PlannerValues) => PlannerValues) => void
   onSubmit: (request: PlanRequest) => void
   loading: boolean
+  /** The plan request has been running a while (slow free router); the button says so. */
+  slow?: boolean
   client: ApiClient
   header: LogHeaderDetails
   onHeaderChange: <K extends keyof LogHeaderDetails>(key: K, value: LogHeaderDetails[K]) => void
@@ -35,6 +38,7 @@ export function PlannerForm({
   onValuesChange,
   onSubmit,
   loading,
+  slow = false,
   client,
   header,
   onHeaderChange,
@@ -45,6 +49,15 @@ export function PlannerForm({
 }: PlannerFormProps) {
   const [submitted, setSubmitted] = useState(false)
   const [geoError, setGeoError] = useState<string | null>(null)
+  const [loadedExample, setLoadedExample] = useState<string | null>(null)
+  // The caption names the loaded example only while the form still holds its places.
+  const example = EXAMPLE_TRIPS.find(
+    (ex) =>
+      ex.id === loadedExample &&
+      ex.values.current.text === values.current.text &&
+      ex.values.pickup.text === values.pickup.text &&
+      ex.values.dropoff.text === values.dropoff.text,
+  )
   // Validate live once the user has tried to submit, so errors clear as they are fixed.
   const shown: PlannerErrors = { ...serverErrors, ...(submitted ? validatePlanner(values) : {}) }
 
@@ -92,16 +105,24 @@ export function PlannerForm({
               key={ex.id}
               type="button"
               title={ex.detail}
+              data-active={example?.id === ex.id || undefined}
               onClick={() => {
                 setGeoError(null)
-                patch(ex.values)
+                setLoadedExample(ex.id)
+                // Examples always start at the next 08:00, so every demo plans the same way.
+                patch({ ...ex.values, startTime: nextMorning() })
               }}
-              className="relative h-7 rounded-full bg-ink-100 px-2.5 text-xs font-medium text-ink-700 ring-1 ring-ink-200 ring-inset transition-colors before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-hw-50 hover:text-hw-700 hover:ring-hw-200"
+              className="relative h-7 rounded-full bg-ink-100 px-2.5 text-xs font-medium text-ink-700 ring-1 ring-ink-200 ring-inset transition-colors before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-hw-50 hover:text-hw-700 hover:ring-hw-200 data-active:bg-hw-50 data-active:text-hw-700 data-active:ring-hw-300"
             >
               {ex.title}
             </button>
           ))}
         </div>
+        {example && (
+          <p className="mt-2 text-xs text-ink-500" aria-live="polite">
+            Loaded: <span className="font-medium text-ink-700">{example.detail}</span>
+          </p>
+        )}
       </div>
 
       <div className="mt-5 px-5 sm:px-6">
@@ -167,7 +188,7 @@ export function PlannerForm({
           value={values.startTime}
           onChange={(e) => patch({ startTime: e.target.value })}
           error={shown.startTime}
-          hint="Home-terminal time. Defaults to the next full hour."
+          hint="Home-terminal time (the current location’s time zone). Defaults to the next 08:00."
           leading={<CalendarClock className="size-4" aria-hidden />}
           className="tabular"
         />
@@ -175,9 +196,10 @@ export function PlannerForm({
 
       <div className="mt-5 px-5 sm:px-6">
         <Disclosure
+          headingLevel={2}
           title="Advanced"
           icon={<Settings2 className="size-4" aria-hidden />}
-          summary={`${options.include_inspections ? 'Inspections' : 'No insp.'} · ${options.rest_status} rest · ${options.fuel_stop_minutes}m fuel`}
+          summary={`${options.include_inspections ? 'Inspections on' : 'Inspections off'} · ${options.rest_status} rest · ${options.fuel_stop_minutes}m fuel`}
           forceOpen={Boolean(shown.fuel)}
         >
           <div className="grid gap-3">
@@ -213,6 +235,7 @@ export function PlannerForm({
           </div>
         </Disclosure>
         <Disclosure
+          headingLevel={2}
           title="Log sheet details"
           icon={<IdCard className="size-4" aria-hidden />}
           summary={header.driver_name || 'Not set'}
@@ -248,7 +271,7 @@ export function PlannerForm({
           icon={<Route className="size-[18px]" aria-hidden />}
           className="w-full"
         >
-          {loading ? 'Planning route & HOS schedule…' : 'Plan trip'}
+          {loading ? (slow ? 'Still planning…' : 'Planning route & HOS schedule…') : 'Plan trip'}
         </Button>
       </div>
     </form>

@@ -59,16 +59,23 @@ export function TripSummary({ plan }: { plan: PlanResponse }) {
         </ol>
       </div>
 
-      <dl className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-4">
+      {/* 4 across when the summary is full width (sm-md), 2 across in the 440 px sidebar (lg+). */}
+      <dl className="grid grid-cols-2 gap-px bg-ink-150 sm:grid-cols-4 lg:grid-cols-2">
         <Stat icon={<Gauge />} label="Driving" value={formatDuration(summary.total_driving_hours)} />
         <Stat
           icon={<Timer />}
           label="On-duty total"
           value={formatDuration(summary.total_on_duty_hours)}
-          sub={[
-            `incl. ${formatDuration(summary.total_driving_hours)} driving`,
-            ...(inspections > 0 ? [`incl. ${formatDuration(inspections)} inspections`] : []),
-          ]}
+          sub={
+            inspections > 0
+              ? `${formatDuration(summary.total_driving_hours)} drive + ${formatDuration(inspections)} insp.`
+              : `incl. ${formatDuration(summary.total_driving_hours)} driving`
+          }
+          title={
+            inspections > 0
+              ? `Includes ${formatDuration(summary.total_driving_hours)} driving and ${formatDuration(inspections)} of pre-/post-trip inspections`
+              : undefined
+          }
         />
         <Stat icon={<CalendarDays />} label="Log sheets" value={String(summary.num_days)} />
         <Stat icon={<Fuel />} label="Fuel stops" value={String(summary.num_fuel_stops)} />
@@ -140,15 +147,17 @@ function Stat({
   value,
   sub,
   tone = 'ok',
+  title,
 }: {
   icon: ReactNode
   label: string
   value: string
   sub?: string | string[]
   tone?: 'ok' | 'warn' | 'danger'
+  title?: string
 }) {
   return (
-    <div className="bg-white px-3.5 py-3">
+    <div className="bg-white px-3.5 py-3" title={title}>
       <dt className="flex items-start gap-1.5 leading-tight text-[11px] font-medium text-ink-500 [&_svg]:mt-px [&_svg]:size-3.5 [&_svg]:shrink-0 [&_svg]:text-ink-400">
         {icon}
         {label}
@@ -183,7 +192,7 @@ export function TripSummarySkeleton() {
         <Skeleton className="mt-3 h-10 w-44 opacity-20" />
         <Skeleton className="mt-4 h-3.5 w-64 opacity-20" />
       </div>
-      <div className="grid grid-cols-2 gap-px bg-ink-150 min-[400px]:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px bg-ink-150 sm:grid-cols-4 lg:grid-cols-2">
         {Array.from({ length: 8 }, (_, i) => (
           <div key={i} className="bg-white px-4 py-3.5">
             <Skeleton className="h-3 w-16" />

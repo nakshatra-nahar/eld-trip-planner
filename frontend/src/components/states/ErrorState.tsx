@@ -1,5 +1,6 @@
 import { CircleAlert, RefreshCw } from 'lucide-react'
 import { useEffect, useRef } from 'react'
+import { scrollBehavior } from '../../lib/motion'
 import { Button } from '../ui'
 
 interface ErrorStateProps {
@@ -12,7 +13,7 @@ export function ErrorState({ title, message, onRetry }: ErrorStateProps) {
   const ref = useRef<HTMLDivElement>(null)
   // The card renders below a tall form; bring it into view so a failed plan never looks like a no-op.
   useEffect(() => {
-    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    ref.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' })
   }, [title, message])
 
   return (

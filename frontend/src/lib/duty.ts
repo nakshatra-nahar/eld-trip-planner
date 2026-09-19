@@ -100,3 +100,12 @@ export const ROLE_ICON = {
   pickup: Package,
   dropoff: Flag,
 } as const
+
+/**
+ * Why a stop was scheduled ("Required: 11-hour driving limit reached"), when the API sends it.
+ * Read defensively: `reason` is an optional, additive field on timeline events and stops.
+ */
+export function stopReason(item: object): string | undefined {
+  const reason = (item as { reason?: unknown }).reason
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined
+}

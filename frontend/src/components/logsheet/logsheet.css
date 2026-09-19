@@ -97,7 +97,22 @@
 
 .ls-pill-date {
   font-size: 11.5px;
-  opacity: 0.8;
+  color: #5a6786; /* 5.1:1 on the sunken pill track */
+}
+
+.ls-pills {
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 4px;
+}
+
+.ls-pill {
+  scroll-snap-align: start;
+}
+
+/* Set from DailyLogsView while more pills are hidden to the right. */
+.ls-pills[data-overflow] {
+  -webkit-mask-image: linear-gradient(to right, #000 82%, transparent);
+  mask-image: linear-gradient(to right, #000 82%, transparent);
 }
 
 .ls-toggle,

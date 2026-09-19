@@ -10,10 +10,21 @@ interface DisclosureProps {
   /** Opens the section when it becomes true, e.g. to reveal a field with an error. */
   forceOpen?: boolean
   children: ReactNode
+  /** Heading level of the header button, so it follows the page outline (default h3). */
+  headingLevel?: 2 | 3 | 4
 }
 
 /** Collapsible section with an accessible header button. Content height animates via CSS grid rows. */
-export function Disclosure({ title, icon, summary, defaultOpen = false, forceOpen = false, children }: DisclosureProps) {
+export function Disclosure({
+  title,
+  icon,
+  summary,
+  defaultOpen = false,
+  forceOpen = false,
+  children,
+  headingLevel = 3,
+}: DisclosureProps) {
+  const Heading = `h${headingLevel}` as const
   const [open, setOpen] = useState(defaultOpen || forceOpen)
   // Open when forceOpen turns on (adjusting state during render, not in an effect).
   const [wasForced, setWasForced] = useState(forceOpen)
@@ -24,7 +35,7 @@ export function Disclosure({ title, icon, summary, defaultOpen = false, forceOpe
   const id = useId()
   return (
     <div className="border-t border-ink-150">
-      <h3>
+      <Heading>
         <button
           type="button"
           aria-expanded={open}
@@ -44,7 +55,7 @@ export function Disclosure({ title, icon, summary, defaultOpen = false, forceOpe
             )}
           />
         </button>
-      </h3>
+      </Heading>
       <div
         id={id}
         role="region"
