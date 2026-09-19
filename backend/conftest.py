@@ -60,6 +60,21 @@ class FakeSession:
         return result
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Throttle history lives in the cache; start every test with a clean slate."""
+    from django.conf import settings
+
+    if not settings.configured:  # pure-engine runs with ``-p no:django``
+        yield
+        return
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture(name="load_fixture")
 def load_fixture_fixture():
     return load_fixture

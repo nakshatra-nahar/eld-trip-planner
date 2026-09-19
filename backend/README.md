@@ -19,7 +19,9 @@ uvx ruff check .
 | GET | `/api/reverse/?lat=..&lon=..` | Nearest populated place from the offline GeoNames index |
 | GET | `/api/health/` | `{"status": "ok"}` |
 
-Errors always use the shape `{"error", "code", "details?"}`. The codes are `validation_error` (400), `geocode_failed` (422), `route_not_found` (422), `upstream_unavailable` (502), `not_found` (404) and `internal_error` (500).
+Errors always use the shape `{"error", "code", "details?"}`. The codes are `validation_error` (400), `geocode_failed` (422), `route_not_found` (422), `rate_limited` (429, with `Retry-After`), `payload_too_large` (413), `upstream_unavailable` (502), `not_found` (404) and `internal_error` (500).
+
+The API is public by design, with no accounts or stored data. Abuse is capped per client IP by `trips/throttling.py`: planning at 20/min (`PLAN_RATE`) and autocomplete at 60/min (`GEOCODE_RATE`). The client is keyed on Vercel's `X-Vercel-Forwarded-For` header.
 
 ## Code map
 

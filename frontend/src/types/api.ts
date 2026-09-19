@@ -190,7 +190,7 @@ export interface PlanResponse {
 
 export interface ApiError {
   error: string // human-readable message
-  code: string // "validation_error" | "geocode_failed" | "route_not_found" | "upstream_unavailable" | "not_found" | "internal_error"
+  code: string // "validation_error" | "geocode_failed" | "route_not_found" | "upstream_unavailable" | "rate_limited" | "payload_too_large" | "not_found" | "internal_error"
   details?: Record<string, string[]>
 }
 

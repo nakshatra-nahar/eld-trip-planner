@@ -28,6 +28,7 @@
 - [Local setup](#local-setup)
 - [Testing](#testing)
 - [Deployment](#deployment)
+- [Security and abuse protection](#security-and-abuse-protection)
 - [Limitations and future work](#limitations-and-future-work)
 - [Credits](#credits)
 
@@ -139,7 +140,7 @@ flowchart LR
 
 ## API reference
 
-All endpoints live under `/api/`. The trailing slash is optional. Every error has the same shape: `{"error": "<message>", "code": "<code>", "details"?: {"<field>": ["..."]}}`.
+All endpoints live under `/api/`. The trailing slash is optional. Planning is rate-limited to 20 requests/min per IP and autocomplete to 60/min; see [Security](#security-and-abuse-protection). Every error has the same shape: `{"error": "<message>", "code": "<code>", "details"?: {"<field>": ["..."]}}`.
 
 ### `POST /api/trips/plan/`
 
@@ -321,6 +322,21 @@ curl https://<frontend>.vercel.app/api/health/  # proxied to Django
 ```
 
 Alternatively, set `VITE_API_BASE_URL=https://<backend>.vercel.app` at build time and add the frontend origin to the backend's `CORS_ALLOWED_ORIGINS`.
+
+## Security and abuse protection
+
+The API is **public on purpose**, with no login. It works like a stateless calculator: there are no accounts, no database and no stored user data, and the upstream services it calls need no keys. So there is nothing private to protect. A login would only get in the way of anyone evaluating the app, and an API key shipped in a browser bundle can be read by anyone.
+
+The real risk is abuse: someone flooding the endpoints that fan out to free, fair-use services. These protections cover it:
+
+| Protection | Where |
+|---|---|
+| Per-IP rate limits: planning **20/min** (`PLAN_RATE`), autocomplete **60/min** (`GEOCODE_RATE`). Clients are keyed on Vercel's platform-set `X-Vercel-Forwarded-For`, which carries the real visitor IP even through the frontend's `/api` rewrite and can't be spoofed. Over the limit, the API returns `429` with `code: "rate_limited"` and a `Retry-After` header. | `trips/throttling.py`, `config/settings.py` |
+| Strict input validation: bounded cycle hours, dates and string lengths, US/CA coordinates only, capped request body size | `trips/serializers.py`, `config/settings.py` |
+| A time budget and timeouts on every upstream call, cached geocoding, and truck-router failover | `trips/services/` |
+| DEBUG off in production, the secret key from the environment, CORS limited to known origins, and the API served only through its own host names | `config/settings.py` |
+
+The limits are kept in each serverless instance's memory, which is enough to stop casual flooding. For a stronger, global limit, add a Vercel Firewall rate-limit rule on `/api/*`.
 
 ## Limitations and future work
 

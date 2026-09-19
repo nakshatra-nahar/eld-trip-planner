@@ -100,9 +100,14 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
     "EXCEPTION_HANDLER": "trips.views.api_exception_handler",
-    # Only views that set ``throttle_scope`` are limited: the geocode autocomplete proxy.
-    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"geocode": os.environ.get("GEOCODE_RATE", "60/min")},
+    # The API is public by design (a stateless calculator with no accounts or stored data), so
+    # abuse is capped per client IP instead. Only views that set ``throttle_scope`` are limited:
+    # trip planning (each call fans out to the routers) and the geocode autocomplete proxy.
+    "DEFAULT_THROTTLE_CLASSES": ["trips.throttling.ClientScopedRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {
+        "plan": os.environ.get("PLAN_RATE", "20/min"),
+        "geocode": os.environ.get("GEOCODE_RATE", "60/min"),
+    },
 }
 
 PLAN_TIME_BUDGET_SECONDS = float(os.environ.get("PLAN_TIME_BUDGET_SECONDS", "25"))

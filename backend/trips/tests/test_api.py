@@ -223,6 +223,41 @@ def test_geocode_is_rate_limited(client, monkeypatch, settings):
     cache.clear()
 
 
+def _limit_plans(monkeypatch, rate):
+    from rest_framework.settings import api_settings
+    from rest_framework.throttling import ScopedRateThrottle
+
+    monkeypatch.setattr(ScopedRateThrottle, "THROTTLE_RATES", {**api_settings.DEFAULT_THROTTLE_RATES, "plan": rate})
+
+
+def test_plan_is_rate_limited_with_api_error_and_retry_after(client, monkeypatch):
+    _limit_plans(monkeypatch, "2/min")
+    # Throttling runs before validation, so even rejected requests count toward the limit.
+    codes = [post(client, {}).status_code for _ in range(2)]
+    assert codes == [400, 400]
+    resp = post(client, VALID)
+    body = assert_api_error(resp, 429, "rate_limited")
+    assert "Too many requests" in body["error"]
+    assert int(resp["Retry-After"]) > 0
+
+
+def test_plan_rate_limit_is_per_client_ip(client, monkeypatch):
+    _limit_plans(monkeypatch, "1/min")
+
+    def plan_from(ip):
+        return client.post(PLAN_URL, data="{}", content_type="application/json", HTTP_X_VERCEL_FORWARDED_FOR=ip)
+
+    assert plan_from("203.0.113.7").status_code == 400
+    assert plan_from("203.0.113.7").status_code == 429
+    assert plan_from("198.51.100.23").status_code == 400  # another visitor is unaffected
+
+
+def test_default_rates_cover_plan_and_geocode():
+    from rest_framework.settings import api_settings
+
+    assert set(api_settings.DEFAULT_THROTTLE_RATES) >= {"plan", "geocode"}
+
+
 @pytest.mark.parametrize("params", [{}, {"q": ""}, {"q": "a"}, {"q": " a "}, {"q": "x" * 201}, {"q": "ok", "limit": 0}])
 def test_geocode_validation(client, params):
     body = assert_api_error(client.get("/api/geocode/", params), 400, "validation_error")

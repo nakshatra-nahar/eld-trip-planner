@@ -126,6 +126,11 @@ export function describeError(error: unknown): { title: string; message: string 
           title: 'Routing service is busy',
           message: 'The free routing service did not respond. This is usually temporary; try again in a few seconds.',
         }
+      case 'rate_limited':
+        return {
+          title: 'Too many plans in a short time',
+          message: `${error.message} Planning is limited per network to keep the free routing services available.`,
+        }
       case 'network_error':
         return { title: 'You appear to be offline', message: error.message }
       default:

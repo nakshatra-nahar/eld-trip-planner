@@ -80,6 +80,12 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
     if isinstance(exc, RecursionError):  # JSON nested too deeply to decode
         return Response(error_body("Request body is not valid JSON.", "validation_error"), status=400)
 
+    if isinstance(exc, exceptions.Throttled):
+        response = exception_handler(exc, context)  # sets the Retry-After header
+        wait = f" Try again in {int(exc.wait) + 1} s." if exc.wait is not None else " Try again shortly."
+        response.data = error_body(f"Too many requests from your network.{wait}", "rate_limited")
+        return response
+
     response = exception_handler(exc, context)
     if response is not None:  # other APIExceptions (405, 415, 404, throttled, ...)
         detail = getattr(exc, "detail", None)
@@ -98,7 +104,9 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
 
 
 class PlanTripView(APIView):
-    """POST /api/trips/plan/  PlanRequest -> PlanResponse."""
+    """POST /api/trips/plan/  PlanRequest -> PlanResponse (rate-limited per client IP)."""
+
+    throttle_scope = "plan"
 
     def post(self, request: Request) -> Response:
         serializer = PlanRequestSerializer(data=request.data)
