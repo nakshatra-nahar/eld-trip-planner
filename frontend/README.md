@@ -13,7 +13,7 @@ npm test         # vitest: log-sheet geometry, formatters, directions, validatio
 ## Configuration
 
 - `VITE_API_BASE_URL` (see [`.env.example`](.env.example)): the backend origin. Leave it empty to call `/api` on the same origin. That is the Vite dev proxy locally, and the `/api/*` rewrite in [`vercel.json`](vercel.json) in production.
-- `vercel.json` proxies `/api/:path*` to `__BACKEND_URL__`. Replace the placeholder with the backend project's URL before deploying. Every other path falls back to `index.html`.
+- `vercel.json` proxies `/api/(.*)` to the deployed backend (`https://eld-trip-planner-api-ten.vercel.app`); point it at your own backend when deploying a copy. The regex form keeps Django's trailing slashes intact. Every other path falls back to `index.html`.
 
 ## Offline demo
 

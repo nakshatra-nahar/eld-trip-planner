@@ -2,8 +2,9 @@
 
 **Enter a current location, a pickup, a drop-off and the hours already used in the cycle. RouteLog plans an FMCSA-compliant trip and returns the route map, every required stop, and a filled-out driver's daily log for each calendar day.**
 
-- **Live app:** LIVE_URL (add `?demo=1` to open a recorded trip that needs no backend)
-- **Loom walkthrough:** LOOM_URL
+- **Live app:** https://routelog-eld.vercel.app (add `?demo=1` to open a recorded trip that needs no backend)
+- **API:** https://eld-trip-planner-api-ten.vercel.app/api/health/
+- **Loom walkthrough:** _link to be added_
 
 ![Planned trip: map, summary and duty timeline](docs/screenshots/results.png)
 
@@ -294,11 +295,11 @@ curl https://<backend>.vercel.app/api/health/ # {"status":"ok"}
 
 `DJANGO_DEBUG` defaults to off (only local `manage.py` commands turn it on), and `DJANGO_SECRET_KEY` is required when it is off. `ALLOWED_HOSTS` already includes `.vercel.app`; set it only for a custom domain.
 
-**2. Frontend (`frontend/`).** A static Vite build. [`frontend/vercel.json`](frontend/vercel.json) rewrites `/api/:path*` to the backend and sends everything else to `index.html`. Replace the `__BACKEND_URL__` placeholder with the backend origin before deploying:
+**2. Frontend (`frontend/`).** A static Vite build. [`frontend/vercel.json`](frontend/vercel.json) rewrites `/api/(.*)` to the backend and sends everything else to `index.html`. It currently points at the deployed backend; to deploy your own copy, swap in your backend origin:
 
 ```bash
 cd frontend
-sed -i '' 's#__BACKEND_URL__#https://<backend>.vercel.app#' vercel.json   # GNU sed: sed -i
+sed -i '' 's#https://eld-trip-planner-api-ten.vercel.app#https://<backend>.vercel.app#' vercel.json   # GNU sed: sed -i
 vercel link                                   # new project, root = frontend/
 vercel --prod
 curl https://<frontend>.vercel.app/api/health/  # proxied to Django
