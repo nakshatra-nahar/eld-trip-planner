@@ -1,5 +1,5 @@
 import { isValidWallTime } from '../../lib/format'
-import type { PlannerErrors, PlannerValues } from './types'
+import type { LocationValue, PlannerErrors, PlannerValues } from './types'
 
 /** Same bounds as the backend serializer (PlanOptionsSerializer.fuel_stop_minutes). */
 export const FUEL_MINUTES = { min: 5, max: 240 } as const
@@ -56,4 +56,35 @@ export function mapServerDetails(details?: Record<string, string[]>, override?: 
     if (field && messages.length) errors[field] = override ?? messages.join(' ')
   }
   return errors
+}
+
+const locationKey = ({ text, selected }: LocationValue) => `${text}|${selected ? `${selected.lat},${selected.lon}` : ''}`
+
+/** What a field's error is about: when this changes, a server error on the field is stale. */
+function fieldValue(values: PlannerValues, field: keyof PlannerErrors): string {
+  switch (field) {
+    case 'current':
+    case 'pickup':
+    case 'dropoff':
+      return locationKey(values[field])
+    case 'cycleUsed':
+      return values.cycleUsed
+    case 'startTime':
+      return values.startTime
+    case 'fuel':
+      return String(values.options.fuel_stop_minutes)
+  }
+}
+
+/**
+ * Server errors that still apply: each one is dropped as soon as its field is edited away from
+ * the value the server rejected (`rejected` is the form as it was when the error arrived).
+ */
+export function liveServerErrors(errors: PlannerErrors, rejected: PlannerValues | null, values: PlannerValues): PlannerErrors {
+  if (!rejected) return {}
+  const live: PlannerErrors = {}
+  for (const [field, message] of Object.entries(errors) as Array<[keyof PlannerErrors, string]>) {
+    if (fieldValue(values, field) === fieldValue(rejected, field)) live[field] = message
+  }
+  return live
 }

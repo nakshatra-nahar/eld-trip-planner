@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import zoneinfo
+
 import pytest
 
 from trips.services import places
@@ -11,6 +13,7 @@ from trips.services.places import (
     highway_ref,
     nearest_place,
     place_namer,
+    timezone_at,
 )
 
 
@@ -104,3 +107,36 @@ def test_highway_ref(road, expected):
 def test_place_namer_highway_prefix():
     assert place_namer(41.5250, -88.0817, "I 80") == "I 80 near Joliet, IL"
     assert place_namer(41.5250, -88.0817, "Jefferson Street") == "Joliet, IL"
+
+
+@pytest.mark.parametrize(
+    ("lat", "lon", "zone"),
+    [
+        (41.8781, -87.6298, "America/Chicago"),  # Chicago
+        (39.7684, -86.1581, "America/Indiana/Indianapolis"),  # Indianapolis
+        (33.4484, -112.0740, "America/Phoenix"),  # Phoenix: no DST
+        (34.9022, -110.1582, "America/Phoenix"),  # Holbrook, AZ
+        (40.7128, -74.0060, "America/New_York"),
+        (47.6062, -122.3321, "America/Los_Angeles"),  # Seattle
+        (39.7392, -104.9903, "America/Denver"),
+        (43.6532, -79.3832, "America/Toronto"),
+        (21.3069, -157.8583, "Pacific/Honolulu"),
+    ],
+)
+def test_timezone_at_nearest_place(lat, lon, zone):
+    assert timezone_at(lat, lon) == zone
+
+
+def test_timezone_far_from_any_place_falls_back_to_utc():
+    assert timezone_at(30.0, -40.0) == "UTC"
+
+
+def test_every_dataset_place_has_a_known_time_zone():
+    zones = {p.tz for cell in places.get_index()._cells.values() for p in cell}
+    assert zones <= zoneinfo.available_timezones()
+
+
+def test_within_radius():
+    index = PlaceIndex([Place("Near", "IL", 41.0, -88.0, 1), Place("Far", "IL", 41.5, -88.0, 1)])
+    assert [p.name for p, _ in index.within(41.05, -88.0, 10)] == ["Near"]
+    assert {p.name for p, _ in index.within(41.05, -88.0, 40)} == {"Near", "Far"}

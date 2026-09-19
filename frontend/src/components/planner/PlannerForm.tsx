@@ -24,6 +24,8 @@ interface PlannerFormProps {
   onHeaderClear: () => void
   onHeaderSample: () => void
   serverErrors?: PlannerErrors
+  /** Called first on every submit, before client validation, so stale server errors clear. */
+  onSubmitStart?: () => void
 }
 
 type LocationKey = 'current' | 'pickup' | 'dropoff'
@@ -39,6 +41,7 @@ export function PlannerForm({
   onHeaderClear,
   onHeaderSample,
   serverErrors,
+  onSubmitStart,
 }: PlannerFormProps) {
   const [submitted, setSubmitted] = useState(false)
   const [geoError, setGeoError] = useState<string | null>(null)
@@ -53,6 +56,7 @@ export function PlannerForm({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    onSubmitStart?.()
     const found = validatePlanner(values)
     setSubmitted(true)
     if (Object.keys(found).length) {
@@ -173,7 +177,7 @@ export function PlannerForm({
         <Disclosure
           title="Advanced"
           icon={<Settings2 className="size-4" aria-hidden />}
-          summary={`${options.include_inspections ? 'Inspections' : 'No inspections'} · ${options.rest_status} rest · ${options.fuel_stop_minutes} min fuel`}
+          summary={`${options.include_inspections ? 'Inspections' : 'No insp.'} · ${options.rest_status} rest · ${options.fuel_stop_minutes}m fuel`}
           forceOpen={Boolean(shown.fuel)}
         >
           <div className="grid gap-3">

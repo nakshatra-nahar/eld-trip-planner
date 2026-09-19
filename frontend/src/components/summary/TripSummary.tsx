@@ -1,14 +1,17 @@
-import { BedDouble, CalendarDays, ChevronDown, Coffee, Fuel, Gauge, Hourglass, Info, RotateCcw, Timer, TriangleAlert } from 'lucide-react'
+import { BedDouble, CalendarDays, Car, ChevronDown, Coffee, Fuel, Gauge, Hourglass, Info, RotateCcw, Timer, TriangleAlert, Truck } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '../../lib/cn'
 import { formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { PlanResponse } from '../../types/api'
 import { Card, Skeleton } from '../ui'
 import { DutyTimelineBar } from './DutyTimelineBar'
+import { inspectionHours, routingLabel } from './summaryModel'
 
 export function TripSummary({ plan }: { plan: PlanResponse }) {
   const { summary, route, input, warnings, assumptions } = plan
   const legs = route.legs
+  const inspections = input.options.include_inspections ? inspectionHours(plan) : 0
+  const routing = routingLabel(route)
   const cycleTone =
     summary.cycle_hours_available_at_end <= 0 ? 'danger' : summary.cycle_hours_available_at_end < 11 ? 'warn' : 'ok'
 
@@ -20,7 +23,19 @@ export function TripSummary({ plan }: { plan: PlanResponse }) {
           aria-hidden
           className="absolute inset-x-0 bottom-0 h-1 bg-[repeating-linear-gradient(90deg,var(--color-hw-500)_0_22px,transparent_22px_34px)]"
         />
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-ink-300 uppercase">Trip summary</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-semibold tracking-[0.14em] text-ink-300 uppercase">Trip summary</p>
+          <span
+            title={`Routing: ${route.provider}`}
+            className={cn(
+              'inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium ring-1 ring-inset',
+              routing.truck ? 'bg-hw-500/15 text-hw-300 ring-hw-400/40' : 'bg-white/[0.07] text-ink-200 ring-white/15',
+            )}
+          >
+            {routing.truck ? <Truck className="size-3.5" aria-hidden /> : <Car className="size-3.5" aria-hidden />}
+            {routing.label}
+          </span>
+        </div>
         <div className="mt-1 flex items-end justify-between gap-4">
           <p className="font-display leading-none font-extrabold tracking-tight">
             <span className="tabular text-[40px]">{formatMiles(summary.total_miles, { unit: false })}</span>
@@ -50,7 +65,10 @@ export function TripSummary({ plan }: { plan: PlanResponse }) {
           icon={<Timer />}
           label="On-duty total"
           value={formatDuration(summary.total_on_duty_hours)}
-          sub={`incl. ${formatDuration(summary.total_driving_hours)} driving`}
+          sub={[
+            `incl. ${formatDuration(summary.total_driving_hours)} driving`,
+            ...(inspections > 0 ? [`incl. ${formatDuration(inspections)} inspections`] : []),
+          ]}
         />
         <Stat icon={<CalendarDays />} label="Log sheets" value={String(summary.num_days)} />
         <Stat icon={<Fuel />} label="Fuel stops" value={String(summary.num_fuel_stops)} />
@@ -72,8 +90,15 @@ export function TripSummary({ plan }: { plan: PlanResponse }) {
       </dl>
 
       <div className="px-5 pt-4 pb-3 sm:px-6">
-        <h2 className="text-[11px] font-semibold tracking-[0.14em] text-ink-500 uppercase">Duty status over the trip</h2>
-        <DutyTimelineBar timeline={plan.timeline} className="mt-1" />
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <h2 className="text-[11px] font-semibold tracking-[0.14em] text-ink-500 uppercase">Duty status over the trip</h2>
+          {input.home_tz_abbr && (
+            <p className="text-[11px] text-ink-500">
+              Home-terminal time (<span className="font-mono font-semibold text-ink-700">{input.home_tz_abbr}</span>)
+            </p>
+          )}
+        </div>
+        <DutyTimelineBar timeline={plan.timeline} tzAbbr={input.home_tz_abbr} className="mt-1" />
       </div>
 
       {warnings.length > 0 && (
@@ -119,7 +144,7 @@ function Stat({
   icon: ReactNode
   label: string
   value: string
-  sub?: string
+  sub?: string | string[]
   tone?: 'ok' | 'warn' | 'danger'
 }) {
   return (
@@ -140,7 +165,11 @@ function Stat({
         >
           {value}
         </span>
-        {sub && <span className="mt-1 block text-[11px] leading-tight text-ink-500">{sub}</span>}
+        {[sub ?? []].flat().map((line, i) => (
+          <span key={line} className={cn('block text-[11px] leading-tight text-ink-500', i === 0 ? 'mt-1' : 'mt-0.5')}>
+            {line}
+          </span>
+        ))}
       </dd>
     </div>
   )

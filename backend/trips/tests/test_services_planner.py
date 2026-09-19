@@ -7,7 +7,8 @@ correctly -> assemble ``PlanResponse``); another checks the full contract end to
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,18 +17,23 @@ from trips.serializers import PlanRequestSerializer
 from trips.services import routing
 from trips.services.errors import GeocodeFailed, RouteNotFound, UnsupportedRegion
 
+from .test_services_valhalla import replay_route
+
 # Key sets of the api.ts interfaces (the JSON contract).
 PLAN_RESPONSE = {"input", "route", "timeline", "stops", "daily_logs", "summary", "assumptions", "warnings"}
-PLAN_INPUT = {"current_location", "pickup_location", "dropoff_location", "current_cycle_used_hours", "start_time", "options"}
+PLAN_INPUT = {"current_location", "pickup_location", "dropoff_location", "current_cycle_used_hours", "start_time", "options",
+              "home_timezone", "home_tz_abbr"}
 RESOLVED = {"label", "lat", "lon"}
 OPTIONS = {"include_inspections", "rest_status", "fuel_stop_minutes"}
-ROUTE_INFO = {"distance_miles", "duration_hours", "geometry", "legs", "provider"}
+ROUTE_INFO = {"distance_miles", "duration_hours", "geometry", "legs", "provider", "truck_routing"}
 ROUTE_LEG = {"from_role", "to_role", "distance_miles", "duration_hours", "geometry", "instructions"}
 INSTRUCTION = {"text", "maneuver", "modifier", "road", "distance_miles", "duration_minutes", "location"}
-PLACE_REF = {"lat", "lon", "name", "city"}  # + optional "road"
+PLACE_REF = {"lat", "lon", "name", "city", "tz"}  # + optional "road"
 TIMELINE_EVENT = {"id", "kind", "status", "label", "start", "end", "duration_hours", "miles", "start_mile",
-                  "end_mile", "leg_index", "start_location", "end_location"}
-STOP = {"id", "kind", "status", "label", "start", "end", "duration_hours", "mile_marker", "day_number", "location"}
+                  "end_mile", "leg_index", "start_location", "end_location", "local_start", "local_end",
+                  "start_tz_abbr", "end_tz_abbr"}
+STOP = {"id", "kind", "status", "label", "start", "end", "duration_hours", "mile_marker", "day_number", "location",
+        "local_start", "local_end", "local_tz_abbr"}
 DAILY_LOG = {"date", "day_number", "total_miles", "segments", "totals", "remarks", "on_duty_hours",
              "cycle_hours_used", "cycle_hours_available", "from_location", "to_location"}
 LOG_SEGMENT = {"status", "start_minute", "end_minute"}
@@ -46,6 +52,8 @@ def assert_plan_response_contract(body: dict) -> None:
     assert set(body["input"]["options"]) == OPTIONS
     route = body["route"]
     assert set(route) == ROUTE_INFO and len(route["legs"]) == 2
+    assert isinstance(route["truck_routing"], bool)
+    ZoneInfo(body["input"]["home_timezone"])  # a valid IANA zone
     assert [(leg["from_role"], leg["to_role"]) for leg in route["legs"]] == [("current", "pickup"), ("pickup", "dropoff")]
     for leg in route["legs"]:
         assert set(leg) == ROUTE_LEG
@@ -57,6 +65,7 @@ def assert_plan_response_contract(body: dict) -> None:
         assert set(ev["start_location"]) - {"road"} == PLACE_REF == set(ev["end_location"]) - {"road"}
     for stop in body["stops"]:
         assert set(stop) == STOP and stop["kind"] != "drive"
+        assert set(stop["location"]) - {"road"} == PLACE_REF
     for log in body["daily_logs"]:
         assert set(log) == DAILY_LOG
         assert set(log["totals"]) == {"OFF", "SB", "D", "ON"}
@@ -81,6 +90,10 @@ def validated(**overrides) -> dict:
 
 
 DALLAS = {"label": "Dallas, Texas, United States", "short_label": "Dallas, TX", "lat": 32.7767, "lon": -96.797}
+CAR_FALLBACK_WARNING = (
+    "Truck routing was unavailable, so this route follows the car road network (OSRM) with a 65 mph cap; "
+    "check it for truck restrictions."
+)
 
 
 @pytest.fixture
@@ -92,12 +105,12 @@ def offline(monkeypatch, load_fixture):
         calls["geocode"].append(q)
         return DALLAS if "dallas" in q.lower() else None
 
-    def fake_fetch_route(waypoints, deadline=None):
+    def fake_route_trip(waypoints, deadline=None):
         calls["route"].append(waypoints)
         return routing.parse_route(load_fixture("osrm_chicago_stlouis_dallas.json.gz"), "OSRM (test)")
 
     monkeypatch.setattr(planner_service, "geocode_one", fake_geocode_one)
-    monkeypatch.setattr(planner_service, "fetch_route", fake_fetch_route)
+    monkeypatch.setattr(planner_service, "route_trip", fake_route_trip)
     return calls
 
 
@@ -131,18 +144,21 @@ def test_orchestration_calls_engine_correctly(monkeypatch, offline):
         "current_cycle_used_hours": 12.5,
         "start_time": "2026-09-21T08:00",
         "options": {"include_inspections": True, "rest_status": "OFF", "fuel_stop_minutes": 30},
+        "home_timezone": "America/Chicago",
+        "home_tz_abbr": "CDT",
     }
     route = body["route"]
-    assert route["provider"] == "OSRM (test)"
+    assert route["provider"] == "OSRM (test)" and route["truck_routing"] is False
     assert route["distance_miles"] == pytest.approx(925.7, abs=0.2)
     assert route["duration_hours"] == pytest.approx(sum(p.total_minutes for p in seen["legs"]) / 60, abs=0.01)
     assert len(route["geometry"]) <= planner_service.MAX_DISPLAY_POINTS
     assert route["geometry"][0] == route["legs"][0]["geometry"][0]
     assert route["geometry"][-1] == route["legs"][1]["geometry"][-1]
     assert route["legs"][0]["instructions"][-1]["text"] == "Arrive at pickup (St. Louis, MO)"
-    # Engine output is passed through untouched; routing warnings (none here) go first.
-    for key in ("timeline", "stops", "daily_logs", "summary", "assumptions", "warnings"):
+    # Engine output is passed through (timeline/stops gain local times); routing warnings go first.
+    for key in ("timeline", "stops", "daily_logs", "summary", "assumptions"):
         assert body[key] == seen["plan"][key]
+    assert body["warnings"] == [CAR_FALLBACK_WARNING, *seen["plan"]["warnings"]]
 
 
 def test_unknown_query_raises_geocode_failed(offline):
@@ -156,14 +172,14 @@ def test_route_errors_propagate(monkeypatch, offline):
     def no_route(waypoints, deadline=None):
         raise RouteNotFound("No drivable route was found between these locations.")
 
-    monkeypatch.setattr(planner_service, "fetch_route", no_route)
+    monkeypatch.setattr(planner_service, "route_trip", no_route)
     with pytest.raises(RouteNotFound):
         planner_service.plan_trip(validated())
 
 
 def test_zero_length_first_leg_warning(monkeypatch, load_fixture):
     monkeypatch.setattr(
-        planner_service, "fetch_route",
+        planner_service, "route_trip",
         lambda waypoints, deadline=None: routing.parse_route(load_fixture("osrm_joliet_same_pickup.json"), "OSRM (test)"),
     )
     body = planner_service.plan_trip(
@@ -173,7 +189,7 @@ def test_zero_length_first_leg_warning(monkeypatch, load_fixture):
             dropoff_location={"lat": 41.7508, "lon": -88.1479},
         )
     )
-    assert body["warnings"][0] == "Current location is at the pickup, so there is no driving before pickup."
+    assert body["warnings"][:2] == [CAR_FALLBACK_WARNING, "Current location is at the pickup, so there is no driving before pickup."]
     assert body["timeline"][0]["kind"] != "drive" or body["timeline"][0]["leg_index"] == 1
     assert body["route"]["legs"][0]["distance_miles"] == 0.0
 
@@ -200,3 +216,77 @@ def test_coordinates_outside_us_ca_are_rejected(offline, where):
         planner_service.plan_trip(validated(pickup_location={"lat": lat, "lon": lon}))
     assert (err.value.status, err.value.code) == (422, "unsupported_region")
     assert "pickup_location" in err.value.details
+
+
+# ---------------------------------------------------------------- truck routing + local times
+
+
+@pytest.fixture
+def truck_route(monkeypatch, load_fixture, fake_response):
+    """Route through ``planner_service`` with a captured Valhalla trip replayed offline."""
+
+    def install(name):
+        result, _ = replay_route(monkeypatch, load_fixture, fake_response, name)
+        monkeypatch.setattr(planner_service, "route_trip", lambda waypoints, deadline=None: result)
+        return result
+
+    return install
+
+
+def _plan_between(waypoints, **overrides):
+    roles = ("current_location", "pickup_location", "dropoff_location")
+    locations = {role: {"lat": lat, "lon": lon} for role, (lon, lat) in zip(roles, waypoints)}
+    return planner_service.plan_trip(validated(**locations, **overrides))
+
+
+def test_truck_route_end_to_end(truck_route):
+    route = truck_route("route_indy_louisville_atlanta.json.gz")
+    body = _plan_between([(-86.158, 39.768), (-85.7585, 38.2527), (-84.388, 33.749)])
+    assert_plan_response_contract(body)
+    assert body["route"]["provider"] == "Valhalla truck (valhalla1.openstreetmap.de)"
+    assert body["route"]["truck_routing"] is True
+    assert CAR_FALLBACK_WARNING not in body["warnings"]
+    loaded = body["route"]["legs"][1]
+    assert loaded["distance_miles"] == pytest.approx(route.legs[1].distance_miles, abs=0.1)
+    assert loaded["instructions"][-1]["text"].startswith("Arrive at dropoff (Atlanta, GA)")
+    assert {"I 65", "I 24", "I 75"} <= {i["road"] for i in loaded["instructions"]}
+
+
+def test_local_times_across_time_zones(truck_route):
+    """LA -> Phoenix -> New York starting 08:00 PDT: logs stay on Pacific time, stops show local time."""
+    truck_route("route_la_phoenix_nyc.json.gz")
+    body = _plan_between([(-118.2437, 34.0522), (-112.074, 33.4484), (-74.006, 40.7128)], current_cycle_used_hours=30)
+    assert_plan_response_contract(body)
+    assert (body["input"]["home_timezone"], body["input"]["home_tz_abbr"]) == ("America/Los_Angeles", "PDT")
+
+    stops = {s["kind"]: s for s in body["stops"]}
+    pickup, dropoff = stops["pickup"], stops["dropoff"]
+    assert pickup["location"]["tz"] == "America/Phoenix"
+    # Arizona stays on MST (UTC-7), which equals PDT in September.
+    assert (pickup["local_start"], pickup["local_tz_abbr"]) == (pickup["start"], "MST")
+    assert dropoff["location"]["tz"] == "America/New_York" and dropoff["local_tz_abbr"] == "EDT"
+    three_hours_later = datetime.strptime(dropoff["end"], planner_service.TIME_FORMAT) + timedelta(hours=3)
+    assert dropoff["local_end"] == three_hours_later.strftime(planner_service.TIME_FORMAT)
+
+    first, last = body["timeline"][0], body["timeline"][-1]
+    assert (first["local_start"], first["start_tz_abbr"]) == (first["start"], "PDT")
+    assert last["end_tz_abbr"] == "EDT"
+    zones = {e["end_location"]["tz"] for e in body["timeline"]}
+    assert {"America/Los_Angeles", "America/Phoenix", "America/Chicago", "America/New_York"} <= zones
+    # Log sheets are untouched: still home-terminal (Pacific) time. Remarks name the interstate.
+    assert body["daily_logs"][0]["date"] == "2026-09-21"
+    remark_roads = {r.get("road") for log in body["daily_logs"] for r in log["remarks"]}
+    assert remark_roads & {"I 40", "I 44", "I 70", "I 80"}
+
+
+@pytest.mark.parametrize(
+    ("home_time", "zone", "expected"),
+    [
+        ("2026-03-08T01:30", "America/New_York", ("2026-03-08T03:30", "EDT")),  # spring forward
+        ("2026-11-01T00:30", "America/New_York", ("2026-11-01T01:30", "EDT")),
+        ("2026-07-01T12:00", "America/Phoenix", ("2026-07-01T10:00", "MST")),
+        ("2026-07-01T12:00", "America/Chicago", ("2026-07-01T12:00", "CDT")),
+    ],
+)
+def test_local_time_conversion(home_time, zone, expected):
+    assert planner_service._local(home_time, ZoneInfo("America/Chicago"), ZoneInfo(zone)) == expected

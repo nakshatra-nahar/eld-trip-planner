@@ -34,12 +34,12 @@ export const EXAMPLE_TRIPS: ExampleTrip[] = [
   {
     id: 'cycle',
     title: 'Near cycle limit',
-    detail: 'Kansas City → St. Louis → Atlanta · 64 h used',
+    detail: 'Kansas City → St. Louis → Atlanta · 58 h used',
     values: {
       current: fromResolved('Kansas City, MO', 39.0997, -94.5786),
       pickup: fromResolved('St. Louis, MO', 38.627, -90.1994),
       dropoff: fromResolved('Atlanta, GA', 33.749, -84.388),
-      cycleUsed: '64',
+      cycleUsed: '58',
     },
   },
 ]

@@ -1,4 +1,5 @@
 // Pure helpers for the Directions tab (unit-tested in directions.test.ts).
+import { placeLabel } from '../../lib/format'
 import type { Instruction } from '../../types/api'
 
 /**
@@ -18,6 +19,20 @@ const INTERSTATE = /\bI[\s-]?(\d{1,3})\b/
 export function interstateOf(step: Pick<Instruction, 'road' | 'text'>): string | null {
   const m = INTERSTATE.exec(step.road) ?? INTERSTATE.exec(step.text)
   return m ? `I-${m[1]}` : null
+}
+
+/**
+ * The road name shown under an instruction, or null when it adds nothing: the instruction
+ * already names it, the step arrives, or the road is just the interstate on the shield ("I-55 S").
+ */
+export function roadCaption(step: Pick<Instruction, 'road' | 'text' | 'maneuver'>): string | null {
+  const road = placeLabel(step.road)
+  if (!road || step.maneuver === 'arrive') return null
+  if (placeLabel(step.text).toLowerCase().includes(road.toLowerCase())) return null
+  const shield = interstateOf(step)
+  const parts = road.split(/[;,/]/).map((part) => part.trim().replace(/\s+[NSEW]$/, ''))
+  if (shield && parts.every((part) => part === shield)) return null
+  return road
 }
 
 /**

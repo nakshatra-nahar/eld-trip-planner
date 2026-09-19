@@ -2,7 +2,6 @@
 // and the FMCSA sheets themselves.
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { createPortal } from 'react-dom'
 import { ChevronDown, Download, FileCode, ImageDown, Layers, Printer } from 'lucide-react'
 import { formatDuration } from '../../lib/format'
 import type { DailyLog, DutyStatus, LogHeaderDetails } from '../../types/api'
@@ -15,16 +14,15 @@ export interface DailyLogsViewProps {
   logs: DailyLog[]
   header: LogHeaderDetails
   tripLabel?: string
+  /** Per-date note printed on the sheet (see lib/dutyPeriods). */
+  notes?: ReadonlyMap<string, string | null>
 }
-
-const PRINT_CLASS = 'printing-logs'
 
 const STATUS_SHORT: Record<DutyStatus, string> = { OFF: 'Off duty', SB: 'Sleeper', D: 'Driving', ON: 'On duty' }
 
-export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
+export function DailyLogsView({ logs, header, tripLabel, notes }: DailyLogsViewProps) {
   const [selected, setSelected] = useState(0)
   const [showAll, setShowAll] = useState(false)
-  const [printing, setPrinting] = useState(false)
   const [busy, setBusy] = useState<null | 'png'>(null)
   const [exportError, setExportError] = useState<string | null>(null)
   // Phones: show the whole sheet at once (like the paper form) unless the driver zooms in.
@@ -36,22 +34,6 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
   const count = logs.length
   const index = Math.min(selected, Math.max(0, count - 1))
   const current = logs[index]
-
-  // Print: mount every sheet in a body-level portal, flag <body>, print, clean up.
-  useEffect(() => {
-    if (!printing) return
-    document.body.classList.add(PRINT_CLASS)
-    const done = () => setPrinting(false)
-    window.addEventListener('afterprint', done)
-    const frame = requestAnimationFrame(() => {
-      window.print()
-    })
-    return () => {
-      cancelAnimationFrame(frame)
-      window.removeEventListener('afterprint', done)
-      document.body.classList.remove(PRINT_CLASS)
-    }
-  }, [printing])
 
   const setSheetRef = useCallback(
     (i: number) => (el: SVGSVGElement | null) => {
@@ -184,7 +166,7 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
         </div>
 
         <div className="ls-actions" role="group" aria-label="Print and export">
-          <button type="button" className="ls-btn ls-btn-primary" aria-label="Print or save as PDF" onClick={() => setPrinting(true)}>
+          <button type="button" className="ls-btn ls-btn-primary" aria-label="Print or save as PDF" onClick={() => window.print()}>
             <Printer size={16} aria-hidden />
             <span>Print / Save as PDF</span>
           </button>
@@ -245,25 +227,19 @@ export function DailyLogsView({ logs, header, tripLabel }: DailyLogsViewProps) {
       <div className="ls-sheets" data-fit={fit || undefined}>
         {visible.map(({ lg, i }) => (
           <figure key={lg.date} className="ls-sheet" data-selected={i === index || undefined}>
-            <LogSheet ref={setSheetRef(i)} log={lg} header={header} dayCount={count} tripLabel={tripLabel} tint />
+            <LogSheet
+              ref={setSheetRef(i)}
+              log={lg}
+              header={header}
+              dayCount={count}
+              tripLabel={tripLabel}
+              note={notes?.get(lg.date)}
+              tint
+            />
           </figure>
         ))}
       </div>
 
-      {printing
-        ? createPortal(
-            <div className="ls-print-root" aria-hidden>
-              {/* @page cannot be scoped by class, so it only exists while printing. */}
-              <style>{'@page { size: letter landscape; margin: 0.3in; }'}</style>
-              {logs.map((lg) => (
-                <div key={lg.date} className="ls-print-page">
-                  <LogSheet log={lg} header={header} dayCount={count} tripLabel={tripLabel} />
-                </div>
-              ))}
-            </div>,
-            document.body,
-          )
-        : null}
     </section>
   )
 }

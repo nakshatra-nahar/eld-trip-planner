@@ -2,7 +2,7 @@ import { CalendarClock, Hourglass, PencilLine, Plus } from 'lucide-react'
 import type { Ref } from 'react'
 import { cn } from '../../lib/cn'
 import { ROLE_ICON } from '../../lib/duty'
-import { formatDateTime, formatDuration, placeLabel } from '../../lib/format'
+import { formatDateTime, formatDuration, formatShortDateTime, placeLabel } from '../../lib/format'
 import type { PlanResponse } from '../../types/api'
 import { Button } from '../ui'
 
@@ -78,7 +78,10 @@ export function TripOverview({ plan, onEdit, onNew, headingRef }: TripOverviewPr
           <dt className="flex items-center gap-1.5 text-[11px] text-ink-500">
             <CalendarClock className="size-3.5" aria-hidden /> Start
           </dt>
-          <dd className="tabular font-mono font-semibold text-ink-900">{formatDateTime(input.start_time)}</dd>
+          <dd className="tabular font-mono font-semibold whitespace-nowrap text-ink-900" title={formatDateTime(input.start_time)}>
+            {formatShortDateTime(input.start_time)}
+            {input.home_tz_abbr && <span className="ml-1 text-[11px] font-medium text-ink-500">{input.home_tz_abbr}</span>}
+          </dd>
         </div>
         <div className="rounded-lg bg-ink-50 px-3 py-2 ring-1 ring-ink-150 ring-inset">
           <dt className="flex items-center gap-1.5 text-[11px] text-ink-500">

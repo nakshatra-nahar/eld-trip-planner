@@ -1,5 +1,5 @@
 // Offline ApiClient used with ?demo=1 so the UI can be reviewed without the backend.
-// The fixtures are real responses recorded from the live backend (OSRM routing + HOS engine).
+// The fixtures are real responses recorded from the live backend (Valhalla truck routing + HOS engine).
 import type { ApiClient } from '../lib/api'
 import type { GeocodeResult, PlanResponse } from '../types/api'
 

@@ -73,7 +73,8 @@ export interface RouteInfo {
   duration_hours: number // truck-adjusted total driving time
   geometry: LngLat[] // full route, simplified for display
   legs: RouteLeg[] // always 2 legs: current->pickup, pickup->dropoff (leg 0 may be ~0 miles)
-  provider: string // e.g. "OSRM (router.project-osrm.org)"
+  provider: string // e.g. "Valhalla truck (valhalla1.openstreetmap.de)" or "OSRM (router.project-osrm.org)"
+  truck_routing: boolean // true when every leg was routed with a truck profile (false = car-network fallback)
 }
 
 export interface PlaceRef {
@@ -82,6 +83,7 @@ export interface PlaceRef {
   name: string // "City, ST" style label, e.g. "Joliet, IL" or "I 80 near Joliet, IL"
   city?: string // the "City, ST" part of name, e.g. "Joliet, IL" (always sent by the API)
   road?: string // highway ref when the place is on one, e.g. "I 80" (omitted otherwise)
+  tz?: string // IANA time zone of the place, e.g. "America/New_York" (always sent by the API)
 }
 
 export interface TimelineEvent {
@@ -98,6 +100,10 @@ export interface TimelineEvent {
   leg_index: number // 0 = current->pickup, 1 = pickup->dropoff
   start_location: PlaceRef
   end_location: PlaceRef
+  local_start?: string // wall-clock time at start_location's zone "YYYY-MM-DDTHH:MM" (always sent)
+  local_end?: string // wall-clock time at end_location's zone (always sent)
+  start_tz_abbr?: string // e.g. "EDT" (always sent)
+  end_tz_abbr?: string // (always sent)
 }
 
 export interface Stop {
@@ -111,6 +117,9 @@ export interface Stop {
   mile_marker: number
   day_number: number // 1-based log sheet index the stop starts on
   location: PlaceRef
+  local_start?: string // wall-clock time in the stop's own time zone (always sent)
+  local_end?: string // (always sent)
+  local_tz_abbr?: string // e.g. "EDT" (always sent)
 }
 
 export interface LogSegment {
@@ -167,6 +176,8 @@ export interface PlanResponse {
     current_cycle_used_hours: number
     start_time: string
     options: PlanOptions
+    home_timezone: string // IANA zone of the current location = home-terminal time used on every log sheet
+    home_tz_abbr: string // abbreviation at trip start, e.g. "CDT"
   }
   route: RouteInfo
   timeline: TimelineEvent[]

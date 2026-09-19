@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import Any
 
 import requests
@@ -18,7 +19,7 @@ import requests
 from .cache import TTLCache
 from .errors import UpstreamUnavailable
 from .http import Deadline, session
-from .places import get_index, nearest_place
+from .places import get_index, haversine_miles, nearest_place
 from .regions import country_for_abbrev, region_abbrev, region_name
 
 log = logging.getLogger(__name__)
@@ -35,12 +36,20 @@ _cache: TTLCache[list[dict[str, Any]]] = TTLCache(maxsize=2048, ttl=24 * 3600)
 
 # Photon "type" values that denote a settlement rather than an address or POI.
 _SETTLEMENT_TYPES = {"city", "town", "village", "hamlet", "locality", "district"}
+# The subset that is a city or town proper (not a county, neighbourhood or locality).
+_TOWN_TYPES = {"city", "town", "village", "hamlet"}
 
-# Internal keys on Photon results, removed by ``_dedupe``: settlement vs address/POI,
-# and the settlement's state/province abbreviation.
+# Internal keys on Photon results, removed by ``_dedupe``: place vs address/POI, the
+# place's state/province abbreviation, its name, and whether it is a city or town.
 _IS_PLACE = "_is_place"
 _ABBREV = "_abbrev"
-_SAME_PLACE_MILES = 5.0  # a settlement node this close to a dataset place is that place
+_NAME = "_name"
+_IS_TOWN = "_is_town"
+_SAME_PLACE_MILES = 15.0  # a dataset place with the same name this close is the same place
+_DUPLICATE_MILES = 22.0  # ~35 km: a city's node and its county/boundary often share a label
+
+# Abbreviations spelled out before matching names: "St. Louis" == "Saint Louis".
+_WORD_ALIASES = {"st": "saint", "ste": "sainte", "ft": "fort", "mt": "mount"}
 
 
 def _join(*parts: str | None) -> str:
@@ -59,6 +68,13 @@ def _result(label: str, short_label: str, lat: float, lon: float) -> dict[str, A
 
 def _normalise_query(q: str) -> str:
     return re.sub(r"\s+", " ", q).strip()
+
+
+def normalise_name(name: str) -> str:
+    """Matching key for place names: "St. Louis" and "Saint-Louis" -> "saint louis"."""
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    words = re.sub(r"[^a-z0-9]+", " ", plain).split()
+    return " ".join(_WORD_ALIASES.get(w, w) for w in words)
 
 
 # ---------------------------------------------------------------- Photon
@@ -104,27 +120,35 @@ def _photon_feature(feature: dict[str, Any]) -> dict[str, Any] | None:
     result = _result(label or short, short or label, float(coords[1]), float(coords[0]))
     result[_IS_PLACE] = kind == "state" or props.get("osm_key") == "place"
     result[_ABBREV] = abbrev
+    result[_NAME] = props.get("name") or ""
+    result[_IS_TOWN] = props.get("osm_key") == "place" and kind in _TOWN_TYPES
     return result
 
 
 def _population(r: dict[str, Any]) -> int:
-    """Population of a settlement result, from the offline places dataset (0 if unknown)."""
-    found = get_index().nearest(r["lat"], r["lon"], prefer_populous=False)
-    return found[0].population if found and found[1] <= _SAME_PLACE_MILES else 0
+    """Population of a town result: the largest same-named place in the offline dataset
+    within a few miles (Photon has no population), else 0."""
+    key = normalise_name(r[_NAME])
+    nearby = get_index().within(r["lat"], r["lon"], _SAME_PLACE_MILES)
+    return max((p.population for p, _ in nearby if normalise_name(p.name) == key), default=0)
 
 
 def _rank_places(q: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order a city search: settlements first, those in a state named in the query
-    ("Dallas, GA") next, then larger places first, so "Chic" offers Chicago before Chico.
-    Addresses and POIs keep Photon's order after the settlements."""
-    _, sep, tail = q.rpartition(",")
-    wanted = region_abbrev(tail) if sep else ""
+    """Order a city search. Places come first; among them, those in a state named in the
+    query ("Dallas, GA"), then cities/towns whose name starts with the query ("St. Lou" ->
+    Saint Louis, MO before the JeffVanderLou neighbourhood), then larger towns first ("Chic"
+    -> Chicago before Chico). Addresses and POIs keep Photon's order after the places."""
+    head, sep, tail = q.partition(",")
+    wanted = region_abbrev(tail.strip()) if sep else ""
+    prefix = normalise_name(head)
 
     def key(item: tuple[int, dict[str, Any]]) -> tuple:
         i, r = item
         if not r[_IS_PLACE]:
-            return (1, 0, 0, i)
-        return (0, bool(wanted) and r[_ABBREV] != wanted, -_population(r), i)
+            return (1, 0, 0, 0, i)
+        is_match = r[_IS_TOWN] and normalise_name(r[_NAME]).startswith(prefix)
+        population = _population(r) if r[_IS_TOWN] else 0
+        return (0, bool(wanted) and r[_ABBREV] != wanted, not is_match, -population, i)
 
     return [r for _, r in sorted(enumerate(results), key=key)]
 
@@ -185,14 +209,16 @@ def _nominatim(q: str, limit: int, deadline: Deadline) -> list[dict[str, Any]]:
 
 
 def _dedupe(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Drop repeats of the same label within ~5 mi (Photon often returns a city's node and its boundary)."""
+    """Drop repeats of the same label within ~35 km: Photon often returns a city's node plus
+    its boundary or its namesake county ("Los Angeles, CA" twice)."""
     kept: list[dict[str, Any]] = []
     for r in results:
-        r.pop(_IS_PLACE, None)
-        r.pop(_ABBREV, None)
+        for internal in (_IS_PLACE, _ABBREV, _NAME, _IS_TOWN):
+            r.pop(internal, None)
         label = r["short_label"].lower()
         if not any(
-            k["short_label"].lower() == label and abs(k["lat"] - r["lat"]) < 0.08 and abs(k["lon"] - r["lon"]) < 0.08
+            k["short_label"].lower() == label
+            and haversine_miles(k["lat"], k["lon"], r["lat"], r["lon"]) <= _DUPLICATE_MILES
             for k in kept
         ):
             kept.append(r)

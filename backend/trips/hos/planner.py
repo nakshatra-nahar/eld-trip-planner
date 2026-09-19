@@ -120,10 +120,22 @@ def build_leg_drives(legs: list[LegProfile]) -> list[LegDrive]:
 class _Planner:
     """Mutable HOS state machine; see the "Algorithm" section of docs/SPEC.md."""
 
-    def __init__(self, drives: list[LegDrive], cycle_used_minutes: float, opts: PlanOptions) -> None:
+    def __init__(
+        self,
+        drives: list[LegDrive],
+        cycle_used_minutes: float,
+        opts: PlanOptions,
+        prior_off_minutes: int = 0,
+        restart_at: int | None = None,
+    ) -> None:
         self.drives = drives
         self.opts = opts
         self.events: list[DutyEvent] = []
+        # Off-duty minutes just before the trip; a restart at minute 0 counts them.
+        self.prior_off = prior_off_minutes
+        # Optional restarts (see _optional_restart): how many were offered, and which to take.
+        self.restart_options = 0
+        self.restart_at = restart_at
 
         self.t = 0
         self.window_start: int | None = None
@@ -155,6 +167,17 @@ class _Planner:
         current = self.drives[self.pos_leg]
         later = sum(d.driven_miles for d in self.drives[self.pos_leg + 1 :])
         return max(0.0, current.driven_miles - current.leg_mile(self.progress)) + later
+
+    def _miles_ahead(self, minutes: int) -> float:
+        """Miles covered by the next ``minutes`` of driving from here (to the trip end at most)."""
+        miles, leg, progress = 0.0, self.pos_leg, self.progress
+        while minutes > 0 and leg < len(self.drives):
+            drive = self.drives[leg]
+            take = min(minutes, max(0, drive.minutes - progress))
+            miles += drive.leg_mile(progress + take) - drive.leg_mile(progress)
+            minutes -= take
+            leg, progress = leg + 1, 0
+        return miles
 
     # ----- event recording ----------------------------------------------------
 
@@ -194,26 +217,33 @@ class _Planner:
     # ----- duty-period transitions -------------------------------------------
 
     def _ensure_duty_period(self) -> None:
-        """Open a duty period (restarting first if the cycle cannot support it)."""
+        """Open a duty period (restarting first if the cycle cannot support it).
+
+        At the trip start the restart may also be optional (see ``_optional_restart``); it
+        counts the off-duty time before the start, so it is shorter than 34 h.
+        """
         if self.window_start is not None:
             return
-        if self._needs_restart():
-            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART)
+        at_start = not self.events
+        if self._needs_restart() or (at_start and self._optional_restart()):
+            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART - (self.prior_off if at_start else 0))
             self._reset_after_off(restart=True)
         self.window_start = self.t
         if self.opts.include_inspections:
             self._stationary(R.Kind.PRE_TRIP, R.ON, R.PRE_TRIP_MINUTES)
+        fuel = self.opts.fuel_stop_minutes
+        if self._fuel_before_rest() and self._cycle_allows(fuel) and not self._restart_before_stop(fuel):
+            self._fuel()  # not fueled before the rest (no cycle room then): fuel before driving off
 
     def _end_duty_period(self, restart: bool | None = None) -> None:
         """Post-trip inspection, then a 10-h rest or a 34-h restart (chosen here when None).
 
-        Before a 10-h rest, a fuel stop that is nearly due is taken at the same stop.
+        Fuel that the next duty period would soon need is taken first, at the same stop.
         """
+        if self._fuel_before_rest() and self._cycle_allows(self.opts.fuel_stop_minutes):
+            self._fuel()
         if restart is None:
-            restart = self._needs_restart()
-            if not restart and self._fuel_soon() and self._cycle_allows(self.opts.fuel_stop_minutes):
-                self._fuel()
-                restart = self._needs_restart()
+            restart = self._needs_restart() or self._optional_restart()
         if self.opts.include_inspections and self.window_start is not None:
             self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES)
         if restart:
@@ -287,6 +317,30 @@ class _Planner:
         room = R.CYCLE_LIMIT - cycle - lead
         return room < min(drive, R.MIN_USEFUL_DRIVING)
 
+    def _optional_restart(self) -> bool:
+        """Whether to take a 34-h restart now although a 10-h rest (or, at the trip start,
+        no rest) would still be legal.
+
+        Offered when the rest of the trip does not fit in the cycle left but fits in a fresh
+        one; then restarting early can save the rest that would otherwise precede the
+        restart. The planner cannot tell locally whether it pays off (the 14-h windows and
+        stop placement decide), so ``plan_drives`` plans the trip once per offered option and
+        keeps the earliest arrival. Offers are numbered in order; ``restart_at`` picks one.
+        A trip that needs more than a fresh cycle keeps the greedy plan (restarting early
+        would not save a restart).
+        """
+        drive = self._driving_remaining()
+        if drive <= 0:
+            return False
+        work = self._work_needed(drive, opening=True)
+        if work > R.CYCLE_LIMIT + _MINUTE_EPS:
+            return False
+        if self.cycle + self._post_trip_reserve() + work <= R.CYCLE_LIMIT + _MINUTE_EPS:
+            return False
+        index = self.restart_options
+        self.restart_options += 1
+        return index == self.restart_at
+
     def _restart_before_stop(self, minutes: int) -> bool:
         """Whether an on-duty stop of ``minutes`` would leave no cycle room to drive on.
 
@@ -318,6 +372,26 @@ class _Planner:
         """Fuel will be due within ``FUEL_EARLY_MILES`` and the trip goes past that point."""
         left = R.FUEL_INTERVAL_MILES - self.miles_since_fuel
         return left < R.FUEL_EARLY_MILES and self._miles_remaining() > left + R.MILE_EPS
+
+    def _fuel_before_rest(self) -> bool:
+        """Fuel at a rest or restart stop rather than early in the next duty period.
+
+        True when fuel is due soon (``_fuel_soon``), or within the first
+        ``FUEL_BEFORE_REST_DRIVING`` of the next period's driving (all of it when a fuel stop
+        is too short to count as the 30-min break), provided fueling now adds no fuel stop to
+        the trip. A later stop is left in place: it can double as, or remove the need for,
+        the 8-h break.
+        """
+        if self._fuel_soon():
+            return True
+        left = R.FUEL_INTERVAL_MILES - self.miles_since_fuel
+        remaining = self._miles_remaining()
+        if remaining <= left + R.MILE_EPS:
+            return False  # the tank reaches the drop-off
+        horizon = R.FUEL_BEFORE_REST_DRIVING if self.opts.fuel_stop_minutes >= R.BREAK_MINUTES else R.MAX_DRIVING
+        if self._miles_ahead(horizon) < left - R.MILE_EPS:
+            return False
+        return 1 + _fuel_stops_needed(0.0, remaining) <= _fuel_stops_needed(self.miles_since_fuel, remaining)
 
     def _drive_leg(self, leg_index: int) -> None:
         self.pos_leg, self.progress = leg_index, 0
@@ -354,23 +428,32 @@ class _Planner:
 
         # 3. 8 hours of driving since the last 30-min interruption.
         if self.drive_since_break >= R.BREAK_AFTER_DRIVING:
-            if (fuel_due or self._fuel_soon()) and fuel >= R.BREAK_MINUTES:
-                self._fuel_stop()  # a >= 30-min fuel stop satisfies the break
-                return
-            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - R.BREAK_MINUTES, cycle_room)
+            fuel_now = fuel_due or self._fuel_soon()
+            fuel_is_break = fuel_now and fuel >= R.BREAK_MINUTES  # a >= 30-min fuel stop is the break
+            stop = fuel if fuel_is_break else R.BREAK_MINUTES + (fuel if fuel_now else 0)
+            after = min(
+                R.MAX_DRIVING - self.drive_in_period,
+                R.DUTY_WINDOW - elapsed - stop,
+                cycle_room - (fuel if fuel_now else 0),  # fueling is on duty
+            )
             if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
-                # Too little driving would follow the break: end the period instead.
+                # Too little driving would follow the stop: end the period instead.
                 self._end_duty_period()
-            else:
+                return
+            if fuel_now:
+                self._fuel_stop()  # a short one is followed by the break at the same place
+            if not fuel_is_break and self.window_start is not None:
                 self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES)
             return
         # 4. Fuel interval reached.
         if fuel_due:
-            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - fuel)
+            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - fuel, cycle_room - fuel)
             if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
                 self._end_duty_period()  # fuel, post-trip and rest at the same stop
-            else:
-                self._fuel_stop()
+                return
+            self._fuel_stop()
+            if fuel < R.BREAK_MINUTES and self.window_start is not None and self._break_due_soon(self.window_start):
+                self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES)  # rather than a stop soon after
             return
         # 5. Drive until the first limit binds.
         chunk = min(
@@ -382,6 +465,17 @@ class _Planner:
             leg_left,
         )
         self._drive(max(1, int(chunk)))
+
+    def _break_due_soon(self, window_start: int) -> bool:
+        """The 8-h break falls due within ``BREAK_EARLY_MINUTES`` of driving that this duty
+        period will still do."""
+        until = R.BREAK_AFTER_DRIVING - self.drive_since_break
+        ahead = min(
+            R.MAX_DRIVING - self.drive_in_period,
+            R.DUTY_WINDOW - (self.t - window_start) - R.BREAK_MINUTES,
+            self._driving_remaining(),
+        )
+        return until <= R.BREAK_EARLY_MINUTES and ahead > until
 
     def _fuel_stop(self) -> None:
         """Fuel now, unless that would strand the cycle: then restart first (fuel comes after)."""
@@ -421,6 +515,11 @@ class _Planner:
         return _merge_adjacent_drives(self.events)
 
 
+def _fuel_stops_needed(miles_since_fuel: float, miles: float) -> int:
+    """Fewest fuel stops to drive ``miles`` more with ``miles_since_fuel`` already on the tank."""
+    return max(0, ceil((miles_since_fuel + miles - R.MILE_EPS) / R.FUEL_INTERVAL_MILES) - 1)
+
+
 def _merge_adjacent_drives(events: list[DutyEvent]) -> list[DutyEvent]:
     """Defensive: join back-to-back driving chunks on the same leg into one event."""
     merged: list[DutyEvent] = []
@@ -449,18 +548,47 @@ def _validate_cycle(cycle_used_hours: float) -> float:
     return hours * 60.0
 
 
+def _validate_prior_off(minutes: int) -> int:
+    if int(minutes) != minutes or not (0 <= minutes < R.RESTART):
+        raise ValueError(f"prior_off_duty_minutes must be a whole number within 0-{R.RESTART - 1}, got {minutes!r}")
+    return int(minutes)
+
+
 def plan_drives(
-    drives: list[LegDrive], cycle_used_hours: float, options: PlanOptions | None = None
+    drives: list[LegDrive],
+    cycle_used_hours: float,
+    options: PlanOptions | None = None,
+    *,
+    prior_off_duty_minutes: int = 0,
 ) -> list[DutyEvent]:
-    """Plan over prepared ``LegDrive``s (shared with the log builder)."""
-    return _Planner(drives, _validate_cycle(cycle_used_hours), options or PlanOptions()).run()
+    """Plan over prepared ``LegDrive``s (shared with the log builder).
+
+    Plans greedily, then once per optional restart the greedy plan passed (see
+    ``_Planner._optional_restart``), and returns the earliest arrival (the greedy plan on a tie).
+    """
+    args = (drives, _validate_cycle(cycle_used_hours), options or PlanOptions(),
+            _validate_prior_off(prior_off_duty_minutes))
+    greedy = _Planner(*args)
+    best = greedy.run()
+    for index in range(greedy.restart_options):
+        events = _Planner(*args, restart_at=index).run()
+        if events[-1].end < best[-1].end:
+            best = events
+    return best
 
 
 def plan_events(
-    legs: list[LegProfile], cycle_used_hours: float, options: PlanOptions | None = None
+    legs: list[LegProfile],
+    cycle_used_hours: float,
+    options: PlanOptions | None = None,
+    *,
+    prior_off_duty_minutes: int = 0,
 ) -> list[DutyEvent]:
     """Plan the trip: drive leg 0, pickup, drive leg 1, drop-off, post-trip.
 
+    ``prior_off_duty_minutes``: off-duty time right before the start (``build_plan`` passes
+    the minutes since local midnight); a restart needed at the start counts it toward 34 h.
     Returns contiguous events starting at minute 0.
     """
-    return plan_drives(build_leg_drives(legs), cycle_used_hours, options)
+    return plan_drives(build_leg_drives(legs), cycle_used_hours, options,
+                       prior_off_duty_minutes=prior_off_duty_minutes)

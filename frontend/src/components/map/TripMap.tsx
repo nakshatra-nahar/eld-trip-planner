@@ -12,7 +12,7 @@ import MapGL, {
   ScaleControl,
   Source,
 } from 'react-map-gl/maplibre'
-import type { Offset as PopupOffset, StyleSpecification } from 'maplibre-gl'
+import type { Map as MapInstance, Offset as PopupOffset, StyleSpecification } from 'maplibre-gl'
 import type { LngLat, PlanResponse } from '../../types/api'
 import { loadMaplibre } from './maplibre'
 import { loadMapStyle } from './mapStyle'
@@ -25,6 +25,7 @@ import {
   DEFAULT_VIEW,
   type MapFocus,
   type MapPlace,
+  nudgeFromPin,
   routeFeatures,
 } from './mapModel'
 import { PlacePopup } from './PlacePopup'
@@ -75,6 +76,24 @@ const PIN_POPUP_OFFSET: PopupOffset = {
   center: [0, -22],
 }
 
+/** Popup offset for a stop marker, following the marker when it was nudged off a pin. */
+function nudgedOffset(nudge?: [number, number]): PopupOffset {
+  if (!nudge) return 20
+  const [dx, dy] = nudge
+  const at = (x: number, y: number): [number, number] => [x + dx, y + dy]
+  return {
+    top: at(0, 20),
+    'top-left': at(14, 14),
+    'top-right': at(-14, 14),
+    bottom: at(0, -20),
+    'bottom-left': at(14, -14),
+    'bottom-right': at(-14, -14),
+    left: at(20, 0),
+    right: at(-20, 0),
+    center: at(0, 0),
+  }
+}
+
 export interface PreviewPoint {
   role: 'current' | 'pickup' | 'dropoff'
   lngLat: LngLat
@@ -102,6 +121,12 @@ function useIsNarrow() {
   return narrow
 }
 
+// Stacking inside the map: stops < selected stop < endpoint pins < selected pin. Map
+// controls (z 5) and the open popup (z 6, index.css) stay above all markers.
+function markerZ(place: MapPlace, active: boolean): number {
+  return (place.role ? 3 : 1) + (active ? 1 : 0)
+}
+
 export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, loading }: TripMapProps) {
   const mapRef = useRef<MapRef>(null)
   const [loaded, setLoaded] = useState(false)
@@ -109,7 +134,10 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
   const [hovered, setHovered] = useState<string | null>(null)
   const [pinned, setPinned] = useState<string | null>(null)
   const narrow = useIsNarrow()
-  const [legendOpen, setLegendOpen] = useState(() => !window.matchMedia('(max-width: 640px)').matches)
+  // The legend covers too much of a phone or tablet map: start it folded below 1024 px.
+  const [legendOpen, setLegendOpen] = useState(() => window.matchMedia('(min-width: 1024px)').matches)
+  // The map and its zoom after the last camera move: stop-marker nudges are recomputed from them.
+  const [view, setView] = useState<{ map: MapInstance; zoom: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -123,9 +151,11 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
   const routeData = useMemo(() => (plan ? routeFeatures(plan) : null), [plan])
   const routeBounds = useMemo(() => (plan ? boundsOf(plan.route.geometry) : null), [plan])
 
-  // Extra left padding on wide maps keeps the route clear of the legend.
+  // Keep pins clear of the map buttons: pins rise ~40 px above their point, so the top padding
+  // clears "Fit route" (and the legend button beside it on phones); on wide maps the legend
+  // sits in the left padding.
   const padding = useMemo(
-    () => (narrow ? { top: 64, bottom: 84, left: 40, right: 56 } : { top: 72, bottom: 56, left: 220, right: 72 }),
+    () => (narrow ? { top: 96, bottom: 84, left: 52, right: 60 } : { top: 72, bottom: 56, left: 220, right: 72 }),
     [narrow],
   )
 
@@ -173,22 +203,48 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
   const popupKey = hovered ?? pinned ?? selectedPlaceKey
   const popupPlace = places.find((p) => p.key === popupKey) ?? null
 
+  // Stop markers that would sit on an endpoint pin at this zoom slide sideways (screen px).
+  const offsets = useMemo(() => {
+    const out = new Map<string, [number, number]>()
+    if (!view) return out
+    const { map } = view
+    const pins = places.filter((p) => p.role).map((p) => map.project(p.lngLat))
+    for (const place of places) {
+      if (place.role) continue
+      const at = map.project(place.lngLat)
+      for (const pin of pins) {
+        const nudge = nudgeFromPin([at.x, at.y], [pin.x, pin.y])
+        if (nudge) {
+          out.set(place.key, nudge)
+          break
+        }
+      }
+    }
+    return out
+  }, [places, view])
+
   function selectPlace(place: MapPlace) {
+    // One popup at a time: a tap replaces whatever is open (hover state included).
+    setHovered(null)
     setPinned(place.key)
-    // On phones the legend would cover the popup: fold it away while a place is open.
-    if (narrow) setLegendOpen(false)
+    // On phones the legend would cover the popup: fold it away while a place is open, and
+    // centre the place so its popup fits beside it instead of running off the map's edge.
+    if (narrow) {
+      setLegendOpen(false)
+      mapRef.current?.easeTo({ center: place.lngLat, offset: [0, -50], duration: 400 })
+    }
     onSelectStop(place.stops[0]?.id ?? null)
   }
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#eef0f3]">
       {/* Map controls come first in the DOM so they are first in tab order (they sit top-left),
-          and stack above markers (z 1-3) but below an open popup (z 5). */}
+          and stack above markers (z 1-4) but below an open popup (z 6). */}
       {plan && (
         <button
           type="button"
           onClick={() => fit(routeBounds)}
-          className="absolute top-2.5 left-2.5 z-[4] inline-flex h-9 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[13px] font-medium text-ink-800 shadow-card ring-1 ring-ink-900/10 hover:bg-ink-50"
+          className="absolute top-2.5 left-2.5 z-[5] inline-flex h-9 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[13px] font-medium text-ink-800 shadow-card ring-1 ring-ink-900/10 hover:bg-ink-50"
         >
           <Maximize2 className="size-3.5" aria-hidden /> Fit route
         </button>
@@ -205,8 +261,13 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
           dragRotate={false}
           touchPitch={false}
           cooperativeGestures={narrow}
-          onLoad={() => setLoaded(true)}
+          onLoad={(e) => {
+            setLoaded(true)
+            setView({ map: e.target, zoom: e.target.getZoom() })
+          }}
+          onZoomEnd={(e) => setView({ map: e.target, zoom: e.viewState.zoom })}
           onClick={() => {
+            setHovered(null)
             setPinned(null)
             onSelectStop(null)
           }}
@@ -231,7 +292,8 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
                   longitude={place.lngLat[0]}
                   latitude={place.lngLat[1]}
                   anchor={place.role ? 'bottom' : 'center'}
-                  style={{ zIndex: place.key === popupKey ? 3 : place.role ? 2 : 1 }}
+                  offset={offsets.get(place.key)}
+                  style={{ zIndex: markerZ(place, place.key === popupKey) }}
                   onClick={(e) => {
                     // Keep the map's own click handler (which clears the selection) from firing.
                     e.originalEvent.stopPropagation()
@@ -265,13 +327,13 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
               longitude={popupPlace.lngLat[0]}
               latitude={popupPlace.lngLat[1]}
               // No fixed anchor: MapLibre flips the popup to whichever side fits inside the map.
-              offset={popupPlace.role ? PIN_POPUP_OFFSET : 20}
+              offset={popupPlace.role ? PIN_POPUP_OFFSET : nudgedOffset(offsets.get(popupPlace.key))}
               closeButton={false}
               closeOnClick={false}
               maxWidth="300px"
               focusAfterOpen={false}
             >
-              <PlacePopup place={popupPlace} />
+              <PlacePopup place={popupPlace} homeTzAbbr={plan?.input.home_tz_abbr} />
             </Popup>
           )}
         </MapGL>

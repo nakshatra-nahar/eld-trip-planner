@@ -47,6 +47,13 @@ MIN_DRIVE_AFTER_STOP = 15
 FUEL_INTERVAL_MILES = 1000.0  # fuel at least every 1,000 miles (assessment brief)
 # Fuel early, at a stop that is happening anyway, when fuel falls due within this many miles.
 FUEL_EARLY_MILES = 75.0
+# Fuel that would fall due within this much of the next duty period's driving is taken at the
+# rest or restart before it. Later in the period the fuel stop can replace the 30-min break
+# (11 h - 8 h = 3 h: a >= 30-min stop after 3 h of driving leaves at most 8 h to drive).
+FUEL_BEFORE_REST_DRIVING = MAX_DRIVING - BREAK_AFTER_DRIVING
+# A fuel stop too short to count as the 30-min break is followed by the break when the break
+# would fall due within this much driving (at most 11 h - 7 h = 4 h follow, so no second break).
+BREAK_EARLY_MINUTES = 60
 PICKUP_MINUTES = 60  # brief: 1 h for pickup, logged ON (p.5: loading is on duty)
 DROPOFF_MINUTES = 60  # brief: 1 h for drop-off, logged ON
 PRE_TRIP_MINUTES = 30  # at the start of every duty period, when inspections are enabled

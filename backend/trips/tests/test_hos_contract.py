@@ -114,6 +114,9 @@ def test_plan_matches_api_ts(plan, contract):
     assert all(isinstance(s, str) and s for s in plan["warnings"])
     # This trip (62.5 h used) needs a restart, so there is at least one warning.
     assert plan["warnings"]
+    # Sheets stay in home-terminal time; the API adds local times, so no "no conversion" claim.
+    assert any("home-terminal time zone" in s for s in plan["assumptions"])
+    assert not any("no time-zone conversion" in s for s in plan["assumptions"])
 
 
 def test_formats_and_ids(plan):

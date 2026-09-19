@@ -68,6 +68,15 @@ def _hours(minutes: float) -> float:
     return round(minutes / 60.0, 2)
 
 
+def _duration(minutes: float) -> str:
+    """Minutes as the UI writes durations: "0m", "45m", "10h", "6h 23m"."""
+    total = max(0, round(minutes))
+    h, m = divmod(total, 60)
+    if h == 0:
+        return f"{m}m"
+    return f"{h}h" if m == 0 else f"{h}h {m:02d}m"
+
+
 def _miles(miles: float) -> float:
     return round(miles, 1)
 
@@ -383,8 +392,11 @@ class _PlanBuilder:
             f"10-hour rests are logged as {rest}; 34-hour restarts are logged off duty.",
             "Current Cycle Used hours do not roll off during the trip (conservative: no per-day history is given).",
             "A 34-hour restart is taken when the rest of the trip's driving no longer fits in the 70-hour "
-            "cycle; on-duty work after the last drive (drop-off, post-trip) may run past 70 h.",
-            "All times are the home-terminal time of the start location; no time-zone conversion.",
+            "cycle, at the trip start or in place of the 10-hour rest that gives the earliest arrival; "
+            "on-duty work after the last drive (drop-off, post-trip) may run past 70 h.",
+            "A 34-hour restart at the trip start counts the off-duty time since midnight toward its 34 hours.",
+            "Log sheets use the home-terminal time zone of the start location for the whole trip, "
+            "even across time zones (FMCSA p.16); stops also show their local time.",
             "A single driver: no split sleeper berth and no team driving.",
             f"Truck speed is capped at {R.TRUCK_SPEED_CAP_MPH:g} mph over each route segment.",
         ]
@@ -395,36 +407,51 @@ class _PlanBuilder:
 
     def warnings(self) -> list[str]:
         out = []
+        # With no hours carried in, would the trip's own work up to its last drive fit in 70 h?
+        # If so, a restart is only needed because the used hours are assumed not to roll off.
+        rolloff = " (assumes none of the hours already used roll off during the trip)"
+        caveat = rolloff if self.initial_cycle > 0 and self._own_work_to_last_drive() <= R.CYCLE_LIMIT else ""
+        cycle = self.initial_cycle
         for ev in self.events:
-            if ev.kind != R.Kind.RESTART:
-                continue
-            day = self._day_of(ev.start) + 1
-            if ev.start == 0:
-                left = max(0.0, R.CYCLE_LIMIT / 60 - self.initial_cycle / 60)
-                out.append(
-                    f"34-hour restart required before driving: only {left:.2f} h of the 70-hour cycle "
-                    f"available at the start (day {day})."
-                )
-            else:
-                out.append(f"34-hour restart required: cycle hours exhausted on day {day}.")
-        final = self._final_cycle()
-        if final > R.CYCLE_LIMIT + 1e-6:
+            if ev.kind == R.Kind.RESTART:
+                room = R.CYCLE_LIMIT - cycle
+                left = _duration(room)
+                if ev.start == 0:
+                    counted = (
+                        f"; it counts the {_duration(R.RESTART - ev.duration)} off duty since midnight, "
+                        f"so it lasts {_duration(ev.duration)}"
+                        if ev.duration < R.RESTART else ""
+                    )
+                    why = (
+                        f"only {left} of the 70-hour cycle is available at the start and the trip needs more"
+                        if room >= 1 else "the 70-hour cycle is already used up at the start"
+                    )
+                    out.append(f"34-hour restart required before driving: {why}{counted}{caveat}.")
+                else:
+                    why = (
+                        f"only {left} of the 70-hour cycle is left and the rest of the trip needs more"
+                        if room >= 1 else "the 70-hour cycle is used up and driving remains"
+                    )
+                    out.append(f"34-hour restart required on day {self._day_of(ev.start) + 1}: {why}{caveat}.")
+                cycle = 0.0
+            elif ev.is_on_duty:
+                cycle += ev.duration
+        if cycle > R.CYCLE_LIMIT + 1e-6:
             after = (
                 "drop-off and post-trip inspection that follow are"
                 if self.options.include_inspections
                 else "drop-off that follows is"
             )
             out.append(
-                f"The cycle ends at {_hours(final):.2f} h: driving finishes within 70 h, and the {after} "
+                f"The cycle ends at {_duration(cycle)}: driving finishes within 70 h, and the {after} "
                 "on duty (not driving), which is allowed after 70 h (FMCSA p.10)."
             )
         return out
 
-    def _final_cycle(self) -> float:
-        cycle = self.initial_cycle
-        for ev in self.events:
-            cycle = 0.0 if ev.kind == R.Kind.RESTART else cycle + (ev.duration if ev.is_on_duty else 0)
-        return cycle
+    def _own_work_to_last_drive(self) -> int:
+        """On-duty minutes of the trip itself, up to the end of its last driving event."""
+        last = max((i for i, ev in enumerate(self.events) if ev.kind == R.Kind.DRIVE), default=-1)
+        return sum(ev.duration for ev in self.events[: last + 1] if ev.is_on_duty)
 
     def build(self) -> dict:
         timeline = self.timeline()
@@ -450,5 +477,7 @@ def build_plan(
     ``summary``, ``assumptions`` and ``warnings`` (see frontend/src/types/api.ts)."""
     options = options or PlanOptions()
     drives = build_leg_drives(legs)
-    events = plan_drives(drives, cycle_used_hours, options)
+    # The driver is off duty from local midnight until the start (the sheets draw it so).
+    since_midnight = start_time.hour * 60 + start_time.minute
+    events = plan_drives(drives, cycle_used_hours, options, prior_off_duty_minutes=since_midnight)
     return _PlanBuilder(drives, events, start_time, cycle_used_hours, options, place_namer).build()

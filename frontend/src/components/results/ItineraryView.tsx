@@ -1,48 +1,48 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Clock, Globe2, MoonStar, Scale } from 'lucide-react'
 import { useMemo } from 'react'
 import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import { formatClock, formatDay, formatDayLong, formatDuration, formatMiles, placeLabel } from '../../lib/format'
+import { localTimeNote, outsideDockHours } from '../../lib/localTime'
 import type { DailyLog, TimelineEvent } from '../../types/api'
-import { StatusChip } from '../ui'
+import { Badge, StatusChip } from '../ui'
+import { buildItineraryDays, carriedLabel, type ItineraryDay } from './itinerary'
 
 interface ItineraryViewProps {
   timeline: TimelineEvent[]
   dailyLogs: DailyLog[]
   selectedId: string | null
   onSelect: (event: TimelineEvent) => void
+  /** Home-terminal zone abbreviation, e.g. "CDT": the time base of every clock shown. */
+  homeTzAbbr?: string
 }
 
-/** Vertical timeline grouped by the calendar day each event starts on. */
-export function ItineraryView({ timeline, dailyLogs, selectedId, onSelect }: ItineraryViewProps) {
-  const days = useMemo(() => {
-    const byDate = new Map<string, TimelineEvent[]>()
-    for (const e of timeline) {
-      const date = e.start.slice(0, 10)
-      byDate.set(date, [...(byDate.get(date) ?? []), e])
-    }
-    return [...byDate.entries()].map(([date, events]) => ({
-      date,
-      events,
-      log: dailyLogs.find((l) => l.date === date),
-    }))
-  }, [timeline, dailyLogs])
+/** Vertical timeline with one group per log sheet (calendar day, home-terminal time). */
+export function ItineraryView({ timeline, dailyLogs, selectedId, onSelect, homeTzAbbr }: ItineraryViewProps) {
+  const days = useMemo(() => buildItineraryDays(timeline, dailyLogs), [timeline, dailyLogs])
 
   return (
-    <div className="grid gap-10">
-      {days.map(({ date, events, log }) => (
+    <div className="grid gap-6">
+      <p className="flex items-center gap-1.5 text-xs text-ink-500">
+        <Clock className="size-3.5 shrink-0 text-ink-400" aria-hidden />
+        <span>
+          Times are home-terminal time{homeTzAbbr ? <> (<span className="font-mono font-semibold text-ink-700">{homeTzAbbr}</span>)</> : null}, as on the logs. Local time is shown where a stop is in another zone.
+        </span>
+      </p>
+      {days.map((day) => (
         <section
-          key={date}
-          aria-labelledby={`day-${date}`}
-          className="grid gap-4 lg:grid-cols-[272px_minmax(0,1fr)] lg:gap-10"
+          key={day.date}
+          aria-labelledby={`day-${day.date}`}
+          className="grid gap-3 lg:grid-cols-[256px_minmax(0,1fr)] lg:gap-6"
         >
-          <DayHeader date={date} log={log} />
+          <DayHeader day={day} />
           <ol className="relative max-w-6xl">
-            {events.map((e, i) => (
+            {day.carried && <CarriedRow carried={day.carried} last={day.events.length === 0} />}
+            {day.events.map((e, i) => (
               <ItineraryRow
                 key={e.id}
                 event={e}
-                last={i === events.length - 1}
+                last={i === day.events.length - 1}
                 selected={e.id === selectedId}
                 onSelect={() => onSelect(e)}
               />
@@ -55,14 +55,16 @@ export function ItineraryView({ timeline, dailyLogs, selectedId, onSelect }: Iti
 }
 
 /** Day card: date, a mini 24-hour duty strip (like the log grid) and the day's totals. */
-function DayHeader({ date, log }: { date: string; log?: DailyLog }) {
+function DayHeader({ day: { date, log, note } }: { day: ItineraryDay }) {
   return (
     <header className="self-start rounded-xl bg-ink-50 p-4 ring-1 ring-ink-150 ring-inset lg:sticky lg:top-[80px]">
       <h3 id={`day-${date}`} className="flex items-baseline gap-2">
-        <span className="font-display text-lg font-extrabold tracking-tight text-hw-700">
+        <span className="font-display text-lg font-extrabold tracking-tight whitespace-nowrap text-hw-700">
           Day {log?.day_number ?? '–'}
         </span>
-        <span className="text-sm font-semibold text-ink-900">{formatDayLong(date).replace(/, \d{4}$/, '')}</span>
+        <span className="text-sm font-semibold text-ink-900" title={formatDayLong(date)}>
+          {formatDay(date)}
+        </span>
       </h3>
       {log && (
         <>
@@ -110,6 +112,12 @@ function DayHeader({ date, log }: { date: string; log?: DailyLog }) {
           </p>
         </>
       )}
+      {note && (
+        <p className="mt-3 flex gap-1.5 rounded-md bg-white px-2 py-1.5 text-[11px] leading-snug text-ink-700 ring-1 ring-ink-150 ring-inset">
+          <Scale className="mt-px size-3.5 shrink-0 text-ink-400" aria-hidden />
+          {note}
+        </p>
+      )}
     </header>
   )
 }
@@ -130,6 +138,8 @@ function ItineraryRow({
   const Icon = kind.icon
   const drive = e.kind === 'drive'
   const crossesMidnight = e.start.slice(0, 10) !== e.end.slice(0, 10)
+  const local = drive ? null : localTimeNote(e.start, e.local_start, e.start_tz_abbr)
+  const dock = (e.kind === 'pickup' || e.kind === 'dropoff') && outsideDockHours(e.local_start ?? e.start)
 
   return (
     <li className="relative grid grid-cols-[4.25rem_1.75rem_minmax(0,1fr)] gap-x-2 sm:grid-cols-[6.5rem_2rem_minmax(0,1fr)] sm:gap-x-3">
@@ -184,7 +194,15 @@ function ItineraryRow({
               <span className="truncate">{placeLabel(e.end_location.name)}</span>
             </>
           ) : (
-            <span className="truncate">{placeLabel(e.start_location.name)}</span>
+            <>
+              <span className="truncate">{placeLabel(e.start_location.name)}</span>
+              {local && (
+                <span className="tabular inline-flex shrink-0 items-center gap-1 rounded bg-ink-100 px-1.5 font-mono text-[11px] text-ink-600">
+                  <Globe2 className="size-3 text-ink-400" aria-hidden />
+                  {local}
+                </span>
+              )}
+            </>
           )}
         </p>
         <p className="tabular mt-0.5 font-mono text-[11px] text-ink-400 xl:mt-0 xl:text-right">
@@ -198,7 +216,49 @@ function ItineraryRow({
           )}
           {e.leg_index === 0 ? ' · to pickup' : ''}
         </p>
+        {dock && (
+          <Badge tone="warning" className="mt-1 xl:col-span-3 xl:mt-0 xl:justify-self-start">
+            <MoonStar className="size-3" aria-hidden />
+            Outside typical dock hours ({formatClock(e.local_start ?? e.start)}
+            {e.start_tz_abbr ? ` ${e.start_tz_abbr}` : ''} local)
+          </Badge>
+        )}
       </button>
+    </li>
+  )
+}
+
+/** A rest or restart that began on an earlier day and is still running at midnight. */
+function CarriedRow({ carried, last }: { carried: NonNullable<ItineraryDay['carried']>; last: boolean }) {
+  const { event: e, allDay } = carried
+  const status = DUTY_STATUS[e.status]
+  const Icon = EVENT_KIND[e.kind].icon
+  return (
+    <li className="relative grid grid-cols-[4.25rem_1.75rem_minmax(0,1fr)] gap-x-2 sm:grid-cols-[6.5rem_2rem_minmax(0,1fr)] sm:gap-x-3">
+      <div className="pt-3 text-right">
+        <p className="tabular font-mono text-[13px] font-semibold text-ink-400">00:00</p>
+        <p className="tabular font-mono text-[11px] text-ink-400">{allDay ? '24:00' : formatClock(e.end)}</p>
+      </div>
+      <div className="relative flex justify-center">
+        <span aria-hidden className={cn('absolute top-0 w-[3px] bg-ink-200', last ? 'h-6' : 'bottom-0')} />
+        <span
+          aria-hidden
+          className="relative mt-3 grid size-7 place-items-center rounded-full bg-white ring-4 ring-white"
+          style={{ boxShadow: `inset 0 0 0 2px ${status.color}`, color: status.color }}
+        >
+          <Icon className="size-3.5" strokeWidth={2.4} />
+        </span>
+      </div>
+      <div
+        className={cn(
+          'mb-1.5 flex min-h-14 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-dashed px-3 py-2.5',
+          allDay ? 'border-ink-300 bg-ink-50' : 'border-ink-200',
+        )}
+      >
+        <span className={cn('text-sm', allDay ? 'font-semibold text-ink-900' : 'text-ink-600')}>{carriedLabel(carried)}</span>
+        <StatusChip status={e.status} />
+        <span className="w-full text-[13px] text-ink-500">{placeLabel(e.start_location.name)}</span>
+      </div>
     </li>
   )
 }

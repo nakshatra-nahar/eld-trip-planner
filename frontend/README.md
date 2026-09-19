@@ -7,7 +7,8 @@ npm install
 npm run dev      # http://localhost:5173; proxies /api to 127.0.0.1:8000
 npm run build    # tsc type-check + production build into dist/
 npm run lint     # oxlint
-npm test         # vitest: log-sheet geometry, formatters, directions, validation
+npm test         # vitest: log-sheet geometry, formatters, directions, validation, share links,
+                 # itinerary grouping, duty periods, local times, map model
 ```
 
 ## Configuration
@@ -17,7 +18,7 @@ npm test         # vitest: log-sheet geometry, formatters, directions, validatio
 
 ## Offline demo
 
-Add a query parameter to review the UI without a backend. The fixtures are responses recorded from the live API (OSRM routing and the HOS engine). They are loaded lazily and never ship in the main bundle.
+Add a query parameter to review the UI without a backend. The fixtures are responses recorded from the live API (Valhalla truck routing and the HOS engine), including the time-zone fields. They are loaded lazily and never ship in the main bundle.
 
 - `?demo=1`: Chicago, IL → St. Louis, MO → Dallas, TX, with 10 h of cycle used (2 log sheets).
 - `?demo=restart`: Seattle, WA → Denver, CO → Houston, TX, with 60 h used, which needs a 34-hour restart (5 log sheets).
@@ -28,9 +29,11 @@ Add a query parameter to review the UI without a backend. The fixtures are respo
 |---|---|
 | `src/types/api.ts` | The shared JSON contract with the Django API (snake_case, source of truth) |
 | `src/lib/api.ts` | Typed fetch client that turns every failure into an `ApiRequestError` |
+| `src/lib/planQuery.ts` | Share links: a `PlanRequest` to a readable URL query and back, plus the `sessionStorage` response cache that lets reload, Back and Forward skip the API |
+| `src/lib/localTime.ts`, `src/lib/dutyPeriods.ts` | Local-time labels and the dock-hours check; driving per duty period within a calendar day |
 | `src/components/planner/` | Trip form: location comboboxes, cycle input, advanced options, log-header fields, example trips |
 | `src/components/map/` | MapLibre map on OpenFreeMap tiles: route legs, endpoint pins, stop markers, popups, legend |
 | `src/components/summary/` | Stat tiles and the whole-trip duty timeline bar |
-| `src/components/results/` | Results tabs: itinerary by day, directions per leg |
-| `src/components/logsheet/` | FMCSA driver's daily log as SVG (`LogSheet`), day switcher, print and SVG/PNG export (`DailyLogsView`) |
+| `src/components/results/` | Results tabs: itinerary by day (one group per log sheet), directions per leg, the share-link button |
+| `src/components/logsheet/` | FMCSA driver's daily log as SVG (`LogSheet`), day switcher, print and SVG/PNG export (`DailyLogsView`, `PrintLogs`) |
 | `src/mocks/` | Offline demo client and recorded fixtures |

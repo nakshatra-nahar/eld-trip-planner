@@ -9,6 +9,7 @@ dependencies = [
     "django-cors-headers>=4.9",
     "djangorestframework>=3.18",
     "requests>=2.32",
+    "tzdata>=2026.4",
 ]
 
 [dependency-groups]

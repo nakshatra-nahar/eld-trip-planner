@@ -183,3 +183,60 @@ def test_provider_failure_is_not_cached_as_not_found(use, fake_response):
     assert geocoding.geocode("Joliet") == []
     use(fake_response(200, PHOTON))
     assert geocoding.geocode("Joliet")[0]["short_label"] == "Joliet, IL"
+
+
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        ("St. Louis", "saint louis"),
+        ("Saint-Louis", "saint louis"),
+        ("St Lou", "saint lou"),
+        ("Ste. Genevieve", "sainte genevieve"),
+        ("Montréal", "montreal"),
+        ("Fort Worth", "fort worth"),
+        ("Ft. Worth", "fort worth"),
+    ],
+)
+def test_normalise_name(name, key):
+    assert geocoding.normalise_name(name) == key
+
+
+@pytest.fixture
+def photon_captured(use, fake_response, load_fixture):
+    """Real Photon answers captured for autocomplete queries (limit 10)."""
+    captured = load_fixture("photon_autocomplete.json")
+    return lambda q: use(fake_response(200, captured[q]))
+
+
+@pytest.mark.parametrize("q", ["St. Lou", "St Lou", "Saint Lou"])
+def test_saint_abbreviations_rank_the_city_first(photon_captured, q):
+    """Photon puts the airport, a school and the JeffVanderLou neighbourhood above St. Louis."""
+    photon_captured("St. Lou")
+    assert geocoding.geocode(q, allow_fallback=False)[0]["short_label"] == "Saint Louis, MO"
+
+
+def test_chic_offers_chicago_first(photon_captured):
+    photon_captured("Chic")
+    labels = [r["short_label"] for r in geocoding.geocode("Chic", allow_fallback=False)]
+    assert labels[0] == "Chicago, IL"
+    assert labels.index("Chico, CA") < labels.index("Chico, TX")  # bigger town first
+
+
+@pytest.mark.parametrize(("q", "label"), [("Los Angeles", "Los Angeles, CA"), ("Honolulu", "Honolulu, HI")])
+def test_city_and_namesake_county_collapse(photon_captured, q, label):
+    photon_captured(q)
+    labels = [r["short_label"] for r in geocoding.geocode(q, allow_fallback=False)]
+    assert labels[0] == label and labels.count(label) == 1
+
+
+def test_same_label_far_apart_is_kept(use, fake_response):
+    features = [_city("Springfield", "Illinois", -89.65, 39.80), _city("Springfield", "Illinois", -88.0, 41.0)]
+    use(fake_response(200, {"type": "FeatureCollection", "features": features}))
+    assert len(geocoding.geocode("Springfield")) == 2
+
+
+def test_population_needs_a_matching_name(use, fake_response):
+    """A small place inside a big city does not inherit the city's population."""
+    features = [_city("Tinyville", "Missouri", -90.20, 38.63), _city("Tipton", "Missouri", -92.78, 38.656)]
+    use(fake_response(200, {"type": "FeatureCollection", "features": features}))
+    assert [r["short_label"] for r in geocoding.geocode("Ti")] == ["Tipton, MO", "Tinyville, MO"]

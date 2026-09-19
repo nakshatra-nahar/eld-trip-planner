@@ -7,6 +7,7 @@ properties on top.
 
 from datetime import datetime, timedelta
 from itertools import pairwise
+from math import ceil, floor
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -14,6 +15,7 @@ from hypothesis import strategies as st
 from trips.hos import LegProfile, PlanOptions, build_plan, plan_events
 from trips.hos import rules as R
 from trips.hos.audit import audit_events, audit_plan
+from trips.hos.planner import _Planner, build_leg_drives
 
 K = R.Kind
 
@@ -64,6 +66,19 @@ def expected_route_miles(legs):
     return sum(leg.total_miles for leg in legs if leg.total_miles >= R.MIN_LEG_MILES)
 
 
+def rest_of_trip_estimate(events, i, options):
+    """A generous estimate of the on-duty minutes the trip needs after event ``i`` up to its
+    last driving minute (no cheaper than the planner's own conservative estimate)."""
+    later = events[i + 1 :]
+    drive = sum(e.duration for e in later if e.kind == K.DRIVE)
+    miles = sum(e.miles for e in later if e.kind == K.DRIVE)
+    periods = ceil(drive / R.MAX_DRIVING) + 1
+    inspections = periods * (R.PRE_TRIP_MINUTES + R.POST_TRIP_MINUTES) if options.include_inspections else 0
+    pickup = R.PICKUP_MINUTES if any(e.kind == K.PICKUP for e in later) else 0
+    fuel = (floor(miles / R.FUEL_INTERVAL_MILES) + 2) * options.fuel_stop_minutes
+    return drive + inspections + pickup + fuel
+
+
 def assert_no_premature_stops(events, cycle_hours, options):
     """Breaks, rests and restarts are only taken when a limit (nearly) binds."""
     window_start = None
@@ -77,7 +92,11 @@ def assert_no_premature_stops(events, cycle_hours, options):
     early = R.MIN_DRIVE_AFTER_STOP + max(R.BREAK_MINUTES, options.fuel_stop_minutes)
     for i, ev in enumerate(events):
         if ev.kind == K.BREAK:
-            assert drive_since_break == R.BREAK_AFTER_DRIVING, (i, ev)
+            # Due now, or soon and taken with a fuel stop too short to count as the break.
+            with_fuel = i > 0 and events[i - 1].kind == K.FUEL and options.fuel_stop_minutes < R.BREAK_MINUTES
+            assert drive_since_break == R.BREAK_AFTER_DRIVING or (
+                with_fuel and drive_since_break >= R.BREAK_AFTER_DRIVING - R.BREAK_EARLY_MINUTES
+            ), (i, ev, drive_since_break)
         if ev.kind in (K.REST, K.RESTART) and window_start is not None:
             # Measure where the period's driving stopped: before its post-trip and any fuel stop.
             j = i
@@ -91,7 +110,10 @@ def assert_no_premature_stops(events, cycle_hours, options):
                 or cycle > restart_floor
             ), (i, ev, drive_in_period, elapsed, cycle)
         if ev.kind == K.RESTART:
-            assert cycle > restart_floor, (i, ev, cycle)
+            # Needed now, or optional: the rest of the trip does not fit in the cycle left.
+            assert cycle > restart_floor or cycle + rest_of_trip_estimate(events, i, options) > R.CYCLE_LIMIT, (
+                i, ev, cycle,
+            )
             # The recap never passes 70 h before a restart (only the final drop-off and
             # post-trip may, which is legal on-duty not-driving time).
             assert cycle <= R.CYCLE_LIMIT + 1e-6, (i, ev, cycle)
@@ -124,27 +146,48 @@ def assert_no_premature_stops(events, cycle_hours, options):
             assert cycle <= R.CYCLE_LIMIT + 1e-6, (i, ev, cycle)
 
 
+def assert_fuel_only_when_needed(events, drives, options):
+    """Fuel stops are only taken when (nearly) 1,000 mi have been driven since the last one;
+    an early stop combines fueling with a stop that was happening anyway, or is taken at a
+    rest because the next duty period would need it within its first hours of driving."""
+    horizon = R.FUEL_BEFORE_REST_DRIVING if options.fuel_stop_minutes >= R.BREAK_MINUTES else R.MAX_DRIVING
+    since = 0.0
+    for i, ev in enumerate(events):
+        if ev.kind == K.FUEL:
+            if since < R.FUEL_INTERVAL_MILES - R.FUEL_EARLY_MILES - 5:
+                near = {e.kind for e in events[max(0, i - 2) : i + 3]}
+                assert near & {K.REST, K.RESTART}, (i, since)
+                ahead, left = 0.0, horizon
+                for e in events[i + 1 :]:
+                    if e.kind == K.DRIVE and left > 0:
+                        take = min(left, e.duration)
+                        drive = drives[e.leg_index]
+                        ahead += drive.leg_mile(e.progress_start + take) - drive.leg_mile(e.progress_start)
+                        left -= take
+                assert since + ahead >= R.FUEL_INTERVAL_MILES - 1e-6, (i, since, ahead)
+            since = 0.0
+        elif ev.kind == K.DRIVE:
+            since += ev.miles
+
+
 def check_trip(legs, cycle, start, options):
-    events = plan_events(legs, cycle, options)
+    prior = start.hour * 60 + start.minute  # build_plan: off duty since midnight
+    events = plan_events(legs, cycle, options, prior_off_duty_minutes=prior)
 
     # HOS rules, contiguity, pickup/drop-off exactly 60 min ON.
-    assert audit_events(events, cycle) == []
+    assert audit_events(events, cycle, prior) == []
     assert_no_premature_stops(events, cycle, options)
+
+    # The restart-placement search never arrives later than the greedy plan.
+    greedy = _Planner(build_leg_drives(legs), cycle * 60, options, prior).run()
+    assert events[-1].end <= greedy[-1].end
 
     # Driven miles equal the (drivable) route miles.
     driven = sum(ev.miles for ev in events if ev.kind == K.DRIVE)
     assert abs(driven - expected_route_miles(legs)) < 1e-6
     assert all(ev.miles >= -1e-9 for ev in events)
 
-    # Fuel stops are only taken when (nearly) 1,000 mi have been driven since the last one;
-    # an early stop combines fueling with a stop that was happening anyway.
-    since = 0.0
-    for ev in events:
-        if ev.kind == K.FUEL:
-            assert since >= R.FUEL_INTERVAL_MILES - R.FUEL_EARLY_MILES - 5, since
-            since = 0.0
-        elif ev.kind == K.DRIVE:
-            since += ev.miles
+    assert_fuel_only_when_needed(events, build_leg_drives(legs), options)
 
     plan = build_plan(legs, start, cycle, options, namer)
     assert audit_plan(plan) == []

@@ -5,7 +5,9 @@ Downloads GeoNames ``cities500.zip`` (all populated places with population >= 50
 and ``admin1CodesASCII.txt``, keeps US and CA rows, maps each row's admin1 code to a
 postal abbreviation and writes ``trips/data/places.csv.gz`` with the columns:
 
-    name,admin,lat,lon,population
+    name,admin,lat,lon,population,tz
+
+``tz`` is the GeoNames IANA time zone ("America/Chicago"), used for local stop times.
 
 US admin1 codes already are postal abbreviations ("IL"); Canadian ones are numeric
 ("08") and are mapped via admin1CodesASCII ("CA.08" -> "Ontario") -> "ON".
@@ -62,10 +64,10 @@ def canadian_admin1(admin1_text: str) -> dict[str, str]:
     return mapping
 
 
-def build(dataset: str) -> list[tuple[str, str, float, float, int]]:
+def build(dataset: str) -> list[tuple[str, str, float, float, int, str]]:
     ca_codes = canadian_admin1(download("admin1CodesASCII.txt").decode("utf-8"))
     archive = zipfile.ZipFile(io.BytesIO(download(f"{dataset}.zip")))
-    rows: list[tuple[str, str, float, float, int]] = []
+    rows: list[tuple[str, str, float, float, int, str]] = []
     with archive.open(f"{dataset}.txt") as fh:
         for raw in io.TextIOWrapper(fh, encoding="utf-8"):
             f = raw.rstrip("\n").split("\t")
@@ -75,7 +77,7 @@ def build(dataset: str) -> list[tuple[str, str, float, float, int]]:
             abbrev = admin1 if country == "US" else ca_codes.get(admin1, "")
             if not region_abbrev(abbrev):  # skips territories / unknown codes
                 continue
-            rows.append((f[1], abbrev, round(float(f[4]), 4), round(float(f[5]), 4), int(f[14] or 0)))
+            rows.append((f[1], abbrev, round(float(f[4]), 4), round(float(f[5]), 4), int(f[14] or 0), f[17]))
     rows.sort(key=lambda r: (r[1], r[0]))
     return rows
 
@@ -90,7 +92,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(["name", "admin", "lat", "lon", "population"])
+    writer.writerow(["name", "admin", "lat", "lon", "population", "tz"])
     writer.writerows(rows)
     # mtime=0 keeps the output byte-identical across rebuilds of the same data.
     with open(args.output, "wb") as out, gzip.GzipFile(fileobj=out, mode="wb", compresslevel=9, mtime=0) as gz:

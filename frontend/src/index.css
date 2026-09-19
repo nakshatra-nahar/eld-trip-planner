@@ -162,9 +162,14 @@
 }
 
 /* ---------- MapLibre chrome, restyled to match the app ---------- */
-/* Popups sit above stop markers (inline z-index 1-3) and the map overlays (z-index 4). */
-.maplibregl-popup {
+/* Markers use inline z-index 1-4 (endpoint pins above stops); map controls and overlays sit
+   at 5 and an open popup above everything at 6. */
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-bottom-right {
   z-index: 5;
+}
+.maplibregl-popup {
+  z-index: 6;
 }
 .maplibregl-popup-content {
   padding: 0 !important;

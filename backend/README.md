@@ -1,12 +1,13 @@
 # RouteLog backend
 
-A stateless Django 6.1 + Django REST Framework API that geocodes the three trip locations, routes them with OSRM, and runs the pure-Python HOS engine to produce the timeline, stops and FMCSA daily logs. See the [root README](../README.md) for the rules, the algorithm and the API reference.
+A stateless Django 6.1 + Django REST Framework API that geocodes the three trip locations, routes them with Valhalla's truck profile (falling back to OSRM), and runs the pure-Python HOS engine to produce the timeline, stops and FMCSA daily logs. See the [root README](../README.md) for the rules, the algorithm and the API reference.
 
 ```bash
 uv sync
 uv run python manage.py runserver 8000
-uv run pytest              # offline suite (recorded OSRM fixtures, Hypothesis property tests)
-uv run pytest -m live      # optional smoke test against the real OSRM + Photon services
+uv run pytest              # offline suite (recorded Valhalla/OSRM/Photon fixtures, Hypothesis property tests)
+uv run pytest -m live      # optional smoke tests against the real Valhalla, OSRM and Photon services
+uvx ruff check .
 ```
 
 ## Endpoints
@@ -25,9 +26,10 @@ Errors always use the shape `{"error", "code", "details?"}`. The codes are `vali
 | Path | Role |
 |---|---|
 | `trips/hos/` | HOS engine with no Django or network imports: `rules.py` (limits), `profile.py` (`LegProfile`), `planner.py` (`plan_events`), `logs.py` (`build_plan`), `audit.py` (independent checker) |
-| `trips/planner_service.py` | `plan_trip`: geocode → route → engine → response |
-| `trips/services/` | `routing.py` (OSRM with host failover and a 65 mph truck cap), `geocoding.py`, `places.py` (offline "City, ST" namer), `instructions.py` (turn-by-turn text), `geometry.py` (Douglas-Peucker) |
-| `trips/data/places.csv.gz` | About 23,000 US/CA populated places, rebuilt with `scripts/build_places.py` from GeoNames |
+| `trips/planner_service.py` | `plan_trip`: geocode → route → engine → local times → response |
+| `trips/services/` | `valhalla.py` (`route_trip`: Valhalla truck routing, splitting legs over the server's 1,500 km limit, OSRM fallback for the whole trip), `routing.py` (OSRM with host failover and a 65 mph truck cap), `geocoding.py`, `places.py` (offline "City, ST" namer and `timezone_at`), `instructions.py` (turn-by-turn text), `geometry.py` (Douglas-Peucker) |
+| `trips/data/places.csv.gz` | About 23,000 US/CA populated places with their IANA time zone, rebuilt with `scripts/build_places.py` from GeoNames |
+| `scripts/capture_route_fixtures.py` | Re-records the Valhalla/OSRM fixtures replayed by `test_services_valhalla.py` |
 | `config/settings.py` | Configured by environment variables; see [`.env.example`](.env.example) |
 
 ## Deploying to Vercel

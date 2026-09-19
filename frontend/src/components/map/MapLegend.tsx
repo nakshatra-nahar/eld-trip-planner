@@ -16,7 +16,7 @@ export function MapLegend({ plan, open, onToggle }: { plan: PlanResponse; open: 
   const hasLeg0 = plan.route.legs[0]?.distance_miles > 0.1
 
   return (
-    <div className="absolute top-14 left-2.5 z-[4] max-w-[calc(100%-7rem)] sm:top-auto sm:bottom-2.5 rounded-xl bg-white/95 text-ink-800 shadow-card ring-1 ring-ink-900/10 backdrop-blur">
+    <div className="absolute top-2.5 left-28 z-[5] max-w-[calc(100%-10rem)] sm:top-auto sm:bottom-2.5 sm:left-2.5 sm:max-w-[calc(100%-7rem)] rounded-xl bg-white/95 text-ink-800 shadow-card ring-1 ring-ink-900/10 backdrop-blur">
       <button
         type="button"
         aria-expanded={open}

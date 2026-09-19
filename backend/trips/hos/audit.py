@@ -17,8 +17,14 @@ from .planner import DutyEvent
 _EPS = 1e-6
 
 
-def audit_events(events: Sequence[DutyEvent], cycle_used_hours: float) -> list[str]:
-    """Check contiguity and every HOS rule the planner must respect."""
+def audit_events(
+    events: Sequence[DutyEvent], cycle_used_hours: float, prior_off_duty_minutes: int = 0
+) -> list[str]:
+    """Check contiguity and every HOS rule the planner must respect.
+
+    ``prior_off_duty_minutes``: off-duty time right before the first event, which counts
+    toward a 34-h restart that opens the trip.
+    """
     problems: list[str] = []
     if not events:
         return ["no events"]
@@ -52,7 +58,7 @@ def audit_events(events: Sequence[DutyEvent], cycle_used_hours: float) -> list[s
     window_start: int | None = None
     drive_in_period = 0
     drive_since_break = 0
-    off_run = 0  # consecutive OFF/SB minutes
+    off_run = prior_off_duty_minutes  # consecutive OFF/SB minutes
     nondriving_run = 0  # consecutive non-driving minutes, any status
     cycle = cycle_used_hours * 60.0
     miles_since_fuel = 0.0

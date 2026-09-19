@@ -1,6 +1,15 @@
+import type { PointerEvent } from 'react'
 import { DUTY_HEX, EVENT_KIND, ROLE_ICON } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import type { EndpointRole, MapPlace } from './mapModel'
+
+/**
+ * Hover previews only for a real mouse: on touch, pointerenter fires on every tap and never
+ * leaves, which kept an old popup open when the next marker was tapped.
+ */
+const mouseOnly = (fn?: (hovering: boolean) => void, value = true) => (e: PointerEvent) => {
+  if (e.pointerType === 'mouse') fn?.(value)
+}
 
 const ROLE_STYLE: Record<EndpointRole, { fill: string; label: string }> = {
   current: { fill: '#0f1729', label: 'Start' },
@@ -25,8 +34,8 @@ export function EndpointPin({ role, label, active = false, onHover }: EndpointPi
     <Tag
       {...(interactive ? { type: 'button' as const } : {})}
       aria-label={`${style.label}: ${label}`}
-      onMouseEnter={() => onHover?.(true)}
-      onMouseLeave={() => onHover?.(false)}
+      onPointerEnter={mouseOnly(onHover)}
+      onPointerLeave={mouseOnly(onHover, false)}
       onFocus={() => onHover?.(true)}
       onBlur={() => onHover?.(false)}
       className={cn(
@@ -69,8 +78,8 @@ export function StopMarker({ place, active, onHover }: StopMarkerProps) {
     <button
       type="button"
       aria-label={`${place.stops.map((s) => s.label).join(', ')} at ${place.title}`}
-      onMouseEnter={() => onHover(true)}
-      onMouseLeave={() => onHover(false)}
+      onPointerEnter={mouseOnly(onHover)}
+      onPointerLeave={mouseOnly(onHover, false)}
       onFocus={() => onHover(true)}
       onBlur={() => onHover(false)}
       className={cn(

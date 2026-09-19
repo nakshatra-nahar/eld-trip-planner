@@ -47,6 +47,13 @@ export function formatDayLong(value: string): string {
   return dayLongFmt.format(parseWallTime(value.length === 10 ? `${value}T00:00` : value))
 }
 
+const monthDayFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+/** "Sep 21, 06:00": fits a narrow card on one line. */
+export function formatShortDateTime(value: string): string {
+  return `${monthDayFmt.format(parseWallTime(value))}, ${formatClock(value)}`
+}
+
 /** "Mon, Sep 21 · 06:00" */
 export function formatDateTime(value: string): string {
   return `${formatDay(value)} · ${formatClock(value)}`

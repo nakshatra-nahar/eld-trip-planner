@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDuration, formatHoursClock, formatMinutesClock, placeLabel } from './format'
+import { formatDuration, formatHoursClock, formatMinutesClock, formatShortDateTime, placeLabel } from './format'
 
 describe('formatDuration', () => {
   it.each([
@@ -34,4 +34,8 @@ describe('placeLabel', () => {
     expect(placeLabel('I 80 near Garrettsville, OH', { withRoad: false })).toBe('Garrettsville, OH')
     expect(placeLabel('Garrettsville, OH', { withRoad: false })).toBe('Garrettsville, OH')
   })
+})
+
+describe('formatShortDateTime', () => {
+  it('drops the weekday so it fits a narrow card', () => expect(formatShortDateTime('2026-09-21T06:00')).toBe('Sep 21, 06:00'))
 })

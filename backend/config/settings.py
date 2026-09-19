@@ -129,6 +129,10 @@ if not DEBUG:
         "security.W003",
         # SSL redirect happens at the edge, before Django (see SECURE_SSL_REDIRECT).
         "security.W008",
+        # HSTS includeSubDomains/preload would bind the whole parent domain; the API is
+        # served from a platform subdomain we don't own, so both stay off.
+        "security.W005",
+        "security.W021",
     ]
 
 # ---------------------------------------------------------------- logging

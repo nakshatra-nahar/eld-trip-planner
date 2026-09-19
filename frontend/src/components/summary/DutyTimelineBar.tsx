@@ -3,14 +3,17 @@ import { DUTY_ORDER, DUTY_STATUS } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import { formatClock, formatDay, formatDuration, minutesBetween, parseWallTime, placeLabel } from '../../lib/format'
 import type { DutyStatus, TimelineEvent } from '../../types/api'
+import { dayLabels } from './summaryModel'
 
 interface DutyTimelineBarProps {
   timeline: TimelineEvent[]
+  /** Home-terminal zone abbreviation for the start/end clocks. */
+  tzAbbr?: string
   className?: string
 }
 
 /** Whole-trip strip chart: one block per event, width proportional to time, colored by duty status. */
-export function DutyTimelineBar({ timeline, className }: DutyTimelineBarProps) {
+export function DutyTimelineBar({ timeline, tzAbbr, className }: DutyTimelineBarProps) {
   const [hover, setHover] = useState<TimelineEvent | null>(null)
 
   const model = useMemo(() => {
@@ -30,9 +33,11 @@ export function DutyTimelineBar({ timeline, className }: DutyTimelineBarProps) {
       d.setUTCDate(d.getUTCDate() + 1)
     }
 
+    const labels = dayLabels(midnights)
+
     const totals: Record<DutyStatus, number> = { OFF: 0, SB: 0, D: 0, ON: 0 }
     for (const e of timeline) totals[e.status] += e.duration_hours
-    return { total, pct, midnights, totals, start, end }
+    return { total, pct, midnights, labels, totals, start, end }
   }, [timeline])
 
   if (!model) return null
@@ -40,13 +45,13 @@ export function DutyTimelineBar({ timeline, className }: DutyTimelineBarProps) {
   return (
     <div className={className}>
       <div className="relative pt-4">
-        {model.midnights.map((m) => (
+        {model.labels.map((m) => (
           <span
             key={m.label}
             className={cn(
               'absolute top-0 font-mono text-[10px] font-medium whitespace-nowrap text-ink-400',
-              // Keep labels near either end inside the bar instead of spilling past it.
-              m.left < 8 ? 'translate-x-0.5' : m.left > 92 ? '-translate-x-full -ml-0.5' : '-translate-x-1/2',
+              // Each day's label starts at its midnight line; one near the right end is right-aligned.
+              m.left > 92 ? '-translate-x-full -ml-0.5' : 'translate-x-0.5',
             )}
             style={{ left: `${m.left}%` }}
           >
@@ -81,8 +86,12 @@ export function DutyTimelineBar({ timeline, className }: DutyTimelineBarProps) {
           ))}
         </div>
         <div className="mt-1 flex justify-between font-mono text-[10px] text-ink-400 tabular">
-          <span>{formatDay(model.start)} {formatClock(model.start)}</span>
-          <span>{formatDay(model.end)} {formatClock(model.end)}</span>
+          <span>
+            {formatDay(model.start)} {formatClock(model.start)} {tzAbbr}
+          </span>
+          <span>
+            {formatDay(model.end)} {formatClock(model.end)} {tzAbbr}
+          </span>
         </div>
       </div>
 

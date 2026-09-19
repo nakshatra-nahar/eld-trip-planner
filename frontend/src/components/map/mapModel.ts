@@ -98,3 +98,24 @@ export function routeFeatures(plan: PlanResponse): FeatureCollection<LineString,
       .filter((f) => f.geometry.coordinates.length >= 2),
   }
 }
+
+/** Endpoint pins are 34x44 px, anchored at the tip; stop markers are ~30 px circles. */
+const PIN = { halfWidth: 17, height: 44 }
+const STOP_RADIUS = 16
+const CLEARANCE = 4
+
+/**
+ * Screen offset for a stop marker that sits on (or within a few px of) an endpoint pin, so
+ * both stay visible and clickable: the marker slides sideways, to the side it is already on.
+ * Returns null when the marker is clear of the pin. Points are screen pixels.
+ */
+export function nudgeFromPin(stop: [number, number], pinTip: [number, number]): [number, number] | null {
+  const [x, y] = stop
+  const [px, py] = pinTip
+  const nearestX = Math.min(Math.max(x, px - PIN.halfWidth), px + PIN.halfWidth)
+  const nearestY = Math.min(Math.max(y, py - PIN.height), py)
+  if (Math.hypot(x - nearestX, y - nearestY) >= STOP_RADIUS + CLEARANCE) return null
+  const side = x < px ? -1 : 1
+  const targetX = px + side * (PIN.halfWidth + STOP_RADIUS + CLEARANCE)
+  return [Math.round(targetX - x), 0]
+}

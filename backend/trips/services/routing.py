@@ -43,6 +43,7 @@ class RoutedLeg:
     steps: list[dict[str, Any]]  # raw OSRM steps, for instructions
     distance_miles: float
     duration_hours: float  # truck-adjusted driving time
+    maneuvers: list[dict[str, Any]] | None = None  # Valhalla maneuvers instead of OSRM steps (valhalla.py)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class RouteResult:
     legs: list[RoutedLeg]
     provider: str  # e.g. "OSRM (router.project-osrm.org)"
     snap_miles: list[float] = field(default_factory=list)  # input -> snapped waypoint distance
+    truck_routing: bool = False  # True when every leg used a truck profile (Valhalla)
 
 
 def _truck_minutes(dist_m: float, dur_s: float) -> float:

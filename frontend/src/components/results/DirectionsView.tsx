@@ -19,7 +19,7 @@ import { useState } from 'react'
 import { cn } from '../../lib/cn'
 import { formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { Instruction, PlanResponse, RouteLeg } from '../../types/api'
-import { groupSteps, interstateOf } from './directions'
+import { groupSteps, interstateOf, roadCaption } from './directions'
 
 const MANEUVER_ICONS = {
   depart: Navigation,
@@ -162,10 +162,8 @@ function LegDirections({
 function StepRow({ step }: { step: Instruction }) {
   const Icon = MANEUVER_ICONS[maneuverKind(step)]
   const text = placeLabel(step.text)
-  const road = placeLabel(step.road)
   const interstate = interstateOf(step)
-  // The road name is only worth a second line when the instruction does not already say it.
-  const showRoad = road && step.maneuver !== 'arrive' && !text.toLowerCase().includes(road.toLowerCase())
+  const road = roadCaption(step)
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       <span
@@ -185,7 +183,7 @@ function StepRow({ step }: { step: Instruction }) {
           )}
           {text}
         </p>
-        {showRoad && <p className="mt-0.5 font-mono text-[11px] text-ink-500">{road}</p>}
+        {road && <p className="mt-0.5 font-mono text-[11px] text-ink-500">{road}</p>}
       </div>
       {step.distance_miles > 0 && (
         <span className="tabular shrink-0 pt-1 text-right font-mono text-xs text-ink-500">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Instruction } from '../../types/api'
-import { groupSteps, interstateOf } from './directions'
+import { groupSteps, interstateOf, roadCaption } from './directions'
 
 const step = (maneuver: string, text: string, road: string, distance_miles: number): Instruction => ({
   text,
@@ -50,5 +50,20 @@ describe('interstateOf', () => {
     expect(interstateOf({ road: 'I 55', text: '' })).toBe('I-55')
     expect(interstateOf({ road: '', text: 'Merge onto I-80 W' })).toBe('I-80')
     expect(interstateOf({ road: 'US 66', text: 'Continue on US 66' })).toBeNull()
+  })
+})
+
+describe('roadCaption', () => {
+  it('hides the road when the interstate shield already shows it', () => {
+    expect(roadCaption(step('continue', 'Continue', 'I 55', 10))).toBeNull()
+    expect(roadCaption(step('continue', 'Keep left', 'I-55 S', 10))).toBeNull()
+    expect(roadCaption(step('continue', 'Keep left', 'I 55; I 44', 10))).toBe('I-55; I-44')
+  })
+  it('hides it when the text names it, and on arrival', () => {
+    expect(roadCaption(step('turn', 'Turn left onto Main St', 'Main St', 1))).toBeNull()
+    expect(roadCaption(step('arrive', 'Arrive', 'Main St', 0))).toBeNull()
+  })
+  it('keeps a road the instruction does not mention', () => {
+    expect(roadCaption(step('fork', 'Keep right at the fork', 'US 287', 1))).toBe('US 287')
   })
 })

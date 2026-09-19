@@ -1,10 +1,13 @@
+import { MoonStar } from 'lucide-react'
 import { DUTY_HEX, EVENT_KIND } from '../../lib/duty'
 import { formatClock, formatDay, formatDuration, formatMiles, placeLabel } from '../../lib/format'
+import { homeClock, localTimeNote, outsideDockHours } from '../../lib/localTime'
 import type { MapPlace } from './mapModel'
 
 const ROLE_TITLE = { current: 'Start', pickup: 'Pickup', dropoff: 'Dropoff' } as const
 
-export function PlacePopup({ place }: { place: MapPlace }) {
+/** `homeTzAbbr` labels the (home-terminal) clock times; local times are added where they differ. */
+export function PlacePopup({ place, homeTzAbbr }: { place: MapPlace; homeTzAbbr?: string }) {
   const mile = place.stops[0]?.mile_marker
   // Markers rank stops by importance; the popup reads better in time order.
   const stops = [...place.stops].sort((a, b) => a.start.localeCompare(b.start))
@@ -24,6 +27,8 @@ export function PlacePopup({ place }: { place: MapPlace }) {
           {stops.map((s) => {
             const Icon = EVENT_KIND[s.kind].icon
             const sameDay = s.start.slice(0, 10) === s.end.slice(0, 10)
+            const local = localTimeNote(s.start, s.local_start, s.local_tz_abbr)
+            const dock = (s.kind === 'pickup' || s.kind === 'dropoff') && outsideDockHours(s.local_start ?? s.start)
             return (
               <li key={s.id} className="flex gap-2.5 px-3.5 py-2.5">
                 <span
@@ -41,8 +46,18 @@ export function PlacePopup({ place }: { place: MapPlace }) {
                   </div>
                   <p className="tabular font-mono text-[11px] text-ink-500">
                     {formatDay(s.start)} {formatClock(s.start)} → {sameDay ? '' : `${formatDay(s.end)} `}
-                    {formatClock(s.end)}
+                    {homeClock(s.end, homeTzAbbr)}
                   </p>
+                  {local && (
+                    <p className="tabular font-mono text-[11px] text-ink-500">
+                      {homeClock(s.start, homeTzAbbr)} · <span className="font-semibold text-ink-700">{local}</span>
+                    </p>
+                  )}
+                  {dock && (
+                    <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-duty-on-soft px-1.5 py-0.5 text-[11px] font-semibold text-[#92400e] ring-1 ring-duty-on/30 ring-inset">
+                      <MoonStar className="size-3" aria-hidden /> Outside typical dock hours
+                    </p>
+                  )}
                 </div>
               </li>
             )

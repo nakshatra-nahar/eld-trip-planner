@@ -20,6 +20,7 @@ import {
   layoutRemarks,
   leaderPath,
   minutesByStatus,
+  recapValues,
   roundedMinutesByStatus,
   splitDate,
   statusRowTop,
@@ -32,6 +33,8 @@ export interface LogSheetProps {
   header: LogHeaderDetails
   dayCount: number
   tripLabel?: string
+  /** Printed under REMARKS, e.g. the two-duty-period driving note (see lib/dutyPeriods). */
+  note?: string | null
   /** React 19 ref-as-prop: the root <svg>, used for SVG/PNG export. */
   ref?: Ref<SVGSVGElement>
   className?: string
@@ -168,13 +171,13 @@ function Ruler({ top, bottom }: { top: number; bottom: number }) {
 
 // ---------- The sheet ----------
 
-export function LogSheet({ log, header, dayCount, tripLabel, ref, className, tint = false }: LogSheetProps) {
+export function LogSheet({ log, header, dayCount, tripLabel, note, ref, className, tint = false }: LogSheetProps) {
   const { month, day, year } = splitDate(log.date)
   // Row totals in whole minutes straight from the drawn segments, so what is printed is
   // exactly what is drawn and the rows always add up to 24:00.
   const rowMinutes = roundedMinutesByStatus(minutesByStatus(log.segments))
   const grandTotal = STATUS_ORDER.reduce((a, s) => a + rowMinutes[s], 0)
-  const onDutyToday = rowMinutes.D + rowMinutes.ON
+  const recap = recapValues(log)
   const dutyPath = buildDutyPath(log.segments)
   const remarks = layoutRemarks(log.remarks, { fontSize: REMARK_FONT_SIZE, angle: REMARK_ANGLE })
   const restart = restartState(log.remarks, log.cycle_hours_used)
@@ -411,10 +414,17 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className, tin
             strokeLinejoin="round"
             paintOrder="stroke"
           >
-            <title>{`${rm.group.location} — ${rm.group.note}`}</title>
-            {rm.text}
+            <title>{rm.text}</title>
+            {rm.lines.map((line, k) => (
+              <tspan key={k} x={rm.anchorX} dy={k === 0 ? 0 : rm.lineHeight}>
+                {line}
+              </tspan>
+            ))}
           </text>
         ))}
+
+        {/* Two duty periods on one sheet: say why Driving may exceed 11:00 (left of the remarks). */}
+        {note ? <NoteBlock text={note} /> : null}
       </g>
 
       {/* ---------- Shipping documents ---------- */}
@@ -438,45 +448,84 @@ export function LogSheet({ log, header, dayCount, tripLabel, ref, className, tin
         <text x={40} y={779} fontSize={9} fontWeight={600}>Complete at end of day</text>
 
         <text fontSize={9} fontWeight={600}>
-          <tspan x={196} y={766}>On duty hours today,</tspan>
-          <tspan x={196} y={778}>Total lines 3 &amp; 4</tspan>
+          <tspan x={170} y={766}>On duty hours today,</tspan>
+          <tspan x={170} y={778}>Total lines 3 &amp; 4</tspan>
         </text>
-        <RecapValue x={196} value={formatMinutesClock(onDutyToday)} />
+        <RecapValue x={170} value={formatMinutesClock(recap.onDutyTodayMinutes)} />
 
         <text fontSize={10.5} fontWeight={800}>
-          <tspan x={378} y={766}>70 Hour /</tspan>
-          <tspan x={378} y={779}>8 Day Drivers</tspan>
+          <tspan x={318} y={766}>70 Hour /</tspan>
+          <tspan x={318} y={779}>8 Day Drivers</tspan>
         </text>
 
-        <text fontSize={9} fontWeight={600}>
-          <tspan x={516} y={766} fontSize={11} fontWeight={800}>A.</tspan>
-          <tspan x={532} y={766}>Total hours on duty this</tspan>
-          <tspan x={532} y={778}>cycle, including today</tspan>
-        </text>
-        <RecapValue x={532} value={formatHoursClock(log.cycle_hours_used)} />
+        <RecapColumn x={410} letter="A." lines={['Total hours on duty last 7', 'days including today']} value={formatHoursClock(recap.a)} />
+        <RecapColumn x={570} letter="B." lines={['Total hours available', 'tomorrow 70 hr. minus A*']} value={formatHoursClock(recap.b)} />
+        <RecapColumn x={730} letter="C." lines={['Total hours on duty last 8', 'days including today']} value={formatHoursClock(recap.c)} />
 
-        <text fontSize={9} fontWeight={600}>
-          <tspan x={706} y={766} fontSize={11} fontWeight={800}>B.</tspan>
-          <tspan x={722} y={766}>Total hours available</tspan>
-          <tspan x={722} y={778}>tomorrow, 70 hr. minus A*</tspan>
-        </text>
-        <RecapValue x={722} value={formatHoursClock(log.cycle_hours_available)} />
-
-        <text fontSize={8.5} fontWeight={600} fill={FAINT}>
-          <tspan x={900} y={766}>*34 consecutive hours off</tspan>
-          <tspan x={900} y={777}>duty resets to 70 available</tspan>
+        <text fontSize={7} fill={FAINT}>
+          <tspan x={40} y={830}>
+            *34 consecutive hours off duty resets to 70 available. A and C show every hour used this cycle,
+            including hours carried in (they have no per-day breakdown), so they may be higher than the
+          </tspan>
+          <tspan x={40} y={839}>
+            true 7- and 8-day sums: a conservative figure.
+          </tspan>
         </text>
         {restart ? (
           <g>
-            <rect x={890} y={790} width={170} height={24} rx={4} fill="none" stroke={INK} strokeWidth={1.4} />
-            <text x={975} y={806.5} textAnchor="middle" fontFamily={INK_FONT} fontSize={10.5} fontWeight={700} fill={INK}>
-              {restart === 'completed' ? '34-hr restart taken' : '34-hr restart in progress'}
+            <rect x={900} y={778} width={160} height={42} rx={4} fill="none" stroke={INK} strokeWidth={1.4} />
+            <text textAnchor="middle" fontFamily={INK_FONT} fontSize={10.5} fontWeight={700} fill={INK}>
+              <tspan x={980} y={795}>34-hr restart</tspan>
+              <tspan x={980} y={810}>{restart === 'completed' ? 'taken' : 'in progress'}</tspan>
             </text>
           </g>
         ) : null}
       </g>
     </svg>
   )
+}
+
+/** One lettered recap column: caption (two lines) over a written value. */
+function RecapColumn({ x, letter, lines, value }: { x: number; letter: string; lines: [string, string]; value: string }) {
+  return (
+    <g>
+      <text fontSize={9} fontWeight={600}>
+        <tspan x={x} y={766} fontSize={11} fontWeight={800}>
+          {letter}
+        </tspan>
+        <tspan x={x + 16} y={766}>{lines[0]}</tspan>
+        <tspan x={x + 16} y={778}>{lines[1]}</tspan>
+      </text>
+      <RecapValue x={x + 16} value={value} />
+    </g>
+  )
+}
+
+/** Small printed note in the empty column left of the remarks, wrapped by words. */
+function NoteBlock({ text }: { text: string }) {
+  const lines = wrapWords(text, 24)
+  return (
+    <g>
+      <rect x={GRID.labelX - 4} y={REMARKS.rulerBottom + 14} width={112} height={lines.length * 11 + 10} rx={3} fill="none" stroke={INK} strokeWidth={0.9} />
+      <text fontFamily={FORM_FONT} fontSize={8.5} fontWeight={600} fill={INK}>
+        {lines.map((line, i) => (
+          <tspan key={i} x={GRID.labelX + 2} y={REMARKS.rulerBottom + 27 + i * 11}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  )
+}
+
+function wrapWords(text: string, maxChars: number): string[] {
+  const lines: string[] = []
+  for (const word of text.split(/\s+/)) {
+    const last = lines[lines.length - 1]
+    if (last !== undefined && `${last} ${word}`.length <= maxChars) lines[lines.length - 1] = `${last} ${word}`
+    else lines.push(word)
+  }
+  return lines
 }
 
 function RecapValue({ x, value }: { x: number; value: string }) {

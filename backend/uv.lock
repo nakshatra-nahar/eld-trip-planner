@@ -208,6 +208,7 @@ dependencies = [
     { name = "django-cors-headers" },
     { name = "djangorestframework" },
     { name = "requests" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -223,6 +224,7 @@ requires-dist = [
     { name = "django-cors-headers", specifier = ">=4.9" },
     { name = "djangorestframework", specifier = ">=3.18" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "tzdata", specifier = ">=2026.4" },
 ]
 
 [package.metadata.requires-dev]

@@ -3,7 +3,7 @@
 // (SVG rendering, exports, legends) without touching the DOM.
 
 import { placeLabel } from '../../lib/format'
-import type { DutyStatus, LogRemark, LogSegment } from '../../types/api'
+import type { DailyLog, DutyStatus, LogRemark, LogSegment } from '../../types/api'
 
 export const MINUTES_PER_DAY = 1440
 
@@ -177,12 +177,11 @@ export function truncate(text: string, max: number): string {
   return `${t.slice(0, max - 1).trimEnd()}…`
 }
 
-/** "City, ST — Note", keeping the city legible when the whole thing is too long. */
-export function remarkText(remark: Pick<LogRemark, 'location' | 'note'>, maxChars: number): string {
-  const location = truncate(remark.location || '', 32)
+/** The full "City, ST — Note" label. Remarks are never truncated: long ones wrap or shrink. */
+export function remarkText(remark: Pick<LogRemark, 'location' | 'note'>): string {
+  const location = (remark.location || '').trim()
   const note = (remark.note || '').trim()
-  const full = location && note ? `${location} — ${note}` : location || note
-  return truncate(full, maxChars)
+  return location && note ? `${location} — ${note}` : location || note
 }
 
 // ---------- Remark label layout ----------
@@ -199,7 +198,7 @@ export interface RemarkGroup {
   end_minute: number
   /** City/state only, one form for the whole sheet (the FMCSA remark needs no road). */
   location: string
-  /** Activities in time order, e.g. "Post-trip inspection, 10-hour rest". */
+  /** Activities in time order, in paper-log shorthand, e.g. "Post-trip / 10-h rest (SB)". */
   note: string
   /** The remarks this label covers; each still gets its own bracket. */
   members: LogRemark[]
@@ -207,7 +206,7 @@ export interface RemarkGroup {
 
 /**
  * Sort remarks and merge consecutive ones at the same place that start close together,
- * as a driver would write "Joplin, MO — Post-trip inspection, 10-hour rest" once instead of
+ * as a driver would write "Joplin, MO — Post-trip / 10-h rest (SB)" once instead of
  * squeezing two labels into a few pixels.
  */
 export function groupRemarks(remarks: readonly LogRemark[]): RemarkGroup[] {
@@ -217,33 +216,38 @@ export function groupRemarks(remarks: readonly LogRemark[]): RemarkGroup[] {
   const groups: RemarkGroup[] = []
   for (const rm of sorted) {
     const location = placeLabel(rm.location, { withRoad: false })
+    const note = shortNote(rm.note, rm.status)
     const prev = groups[groups.length - 1]
     const last = prev?.members[prev.members.length - 1]
     if (prev && last && prev.location === location && rm.start_minute - last.start_minute <= REMARK_MERGE_MINUTES) {
       prev.members.push(rm)
       prev.end_minute = Math.max(prev.end_minute, rm.end_minute)
-      const note = shortNote(rm.note.trim())
-      if (prev.members.length === 2) prev.note = shortNote(prev.note)
-      if (note && !prev.note.split(', ').includes(note)) prev.note = prev.note ? `${prev.note}, ${note}` : note
+      if (note && !prev.note.split(' / ').includes(note)) prev.note = prev.note ? `${prev.note} / ${note}` : note
     } else {
-      groups.push({
-        start_minute: rm.start_minute,
-        end_minute: rm.end_minute,
-        location,
-        note: rm.note.trim(),
-        members: [rm],
-      })
+      groups.push({ start_minute: rm.start_minute, end_minute: rm.end_minute, location, note, members: [rm] })
     }
   }
   return groups
 }
 
-/** Paper-log shorthand, used when several activities share one label. */
-export function shortNote(note: string): string {
-  return note
+/**
+ * Paper-log shorthand for an activity: "Post-trip inspection" -> "Post-trip",
+ * "10-hour rest" (sleeper) -> "10-h rest (SB)", "10-hour rest (cont.)" -> "10-h rest (SB, cont.)".
+ */
+export function shortNote(note: string, status?: DutyStatus): string {
+  let s = note
+    .trim()
     .replace(/\b(Pre|Post)-trip inspection\b/gi, '$1-trip')
-    .replace(/\b(\d+)-hour\b/gi, '$1-hr')
-    .replace(/\b(\d+)-minute\b/gi, '$1-min')
+    .replace(/\b(\d+)-hours?\b/gi, '$1-h')
+    .replace(/\b(\d+)-minutes?\b/gi, '$1-min')
+    .replace(/\s*\(sleeper berth\)/i, ' (SB)')
+    .replace(/\s*\(off duty\)/i, ' (OFF)')
+  // A 10-hour rest can be logged either way, so the sheet says which.
+  if (/\brest\b/i.test(s) && !/\brestart\b/i.test(s) && (status === 'SB' || status === 'OFF') && !/\((SB|OFF)\b/.test(s)) {
+    const cont = /\s*\(cont\.\)/i.test(s)
+    s = `${s.replace(/\s*\(cont\.\)/i, '')} (${status}${cont ? ', cont.' : ''})`
+  }
+  return s
 }
 
 export interface RemarkLayout {
@@ -253,32 +257,40 @@ export interface RemarkLayout {
   /** Where the rotated label is anchored (may be pushed right of startX). */
   anchorX: number
   anchorY: number
-  /** Label already truncated to the space available. */
+  /** The whole label, never truncated. */
   text: string
-  /** Font size for this label: shrunk (down to a floor) before truncating. */
+  /** One line, or two ("City, ST" / activity) when one would not fit. */
+  lines: string[]
+  /** Font size for this label: shrunk when needed, never below REMARK_MIN_FONT. */
   fontSize: number
+  /** Baseline-to-baseline distance between the two lines. */
+  lineHeight: number
   /** True when the label was moved off its bracket and needs a leader line. */
   displaced: boolean
 }
 
 export interface RemarkLayoutOptions {
   fontSize?: number
-  /** Smallest size a long label may shrink to before it is truncated. */
+  /** Smallest size a one-line label may shrink to before it wraps onto two lines. */
   minFontSize?: number
   /** Rotation of the labels in degrees (positive = clockwise in SVG). */
   angle?: number
 }
 
+/** Absolute floor for a label that is still too long on two lines. */
+export const REMARK_MIN_FONT = 6.5
+
 /**
- * Lay out diagonal remark labels without overlap.
+ * Lay out diagonal remark labels without overlap and without truncation.
  *
- * All labels share one rotation, so they are parallel strips. Two strips whose
- * anchors sit on the same baseline are separated perpendicularly by
- * dx * sin(angle); they never collide if that separation is at least one line
- * height, regardless of text length. That reduces the problem to 1-D spacing of
- * anchors along the baseline: a forward pass pushes crowded labels right, a
- * backward pass pulls them back inside the right limit, and each label is then
- * truncated to the room left before the sheet's right/bottom edges.
+ * All labels share one rotation, so they are parallel strips. Two strips whose anchors sit on
+ * the same baseline are separated perpendicularly by dx * sin(angle); they never collide if
+ * that separation covers the right label's descent (plus its second line, if wrapped) and the
+ * left label's ascent, regardless of text length. That reduces the problem to 1-D spacing of
+ * anchors along the baseline: a forward pass pushes crowded labels right, and a backward pass
+ * pulls them back inside the right limit. A label that does not fit on one line at
+ * `minFontSize` wraps to "City, ST" over the activity; the layout then runs once more with the
+ * wider spacing that needs. Finally each label shrinks to the room it has.
  */
 export function layoutRemarks(remarks: readonly LogRemark[], opts: RemarkLayoutOptions = {}): RemarkLayout[] {
   const fontSize = opts.fontSize ?? 10.5
@@ -286,51 +298,65 @@ export function layoutRemarks(remarks: readonly LogRemark[], opts: RemarkLayoutO
   const sin = Math.sin(angle)
   const cos = Math.cos(angle)
   const minFontSize = Math.min(fontSize, opts.minFontSize ?? 8.5)
-  const lineGap = fontSize * 1.3
+  const lineHeight = fontSize * 1.15
+  const ascent = fontSize * 0.75
   const minX = GRID.left + 2
   const maxX = GRID.right + 30
+  const anchorY = REMARKS.textTop
 
   const groups = groupRemarks(remarks)
   const n = groups.length
   if (n === 0) return []
 
-  // Shrink the gap if a pathological number of remarks would not otherwise fit.
-  const gap = Math.min(lineGap / sin, (maxX - minX) / Math.max(1, n - 1))
+  const texts = groups.map((g) => remarkText(g))
+  const wrapped = groups.map((g) => [g.location, g.note].filter(Boolean))
+  const width = (lines: string[], size: number) => Math.max(...lines.map((l) => l.length)) * size * MONO_CHAR_WIDTH
+  // Room along the text before the sheet's bottom and right edges, for a label anchored at x.
+  const roomY = (lineCount: number) => (REMARKS.bottom - anchorY - (lineCount - 1) * lineHeight * cos) / sin
+  const roomX = (x: number) => (REMARKS.rightLimit - x - ascent * sin) / cos
+  const room = (x: number, lineCount: number) => Math.min(roomX(x), roomY(lineCount))
 
+  // Start on one line unless even the full height of the remarks area cannot hold it.
+  let lines = groups.map((_, i) => (width([texts[i]], minFontSize) > roomY(1) && wrapped[i].length > 1 ? wrapped[i] : [texts[i]]))
   const ideal = groups.map((g) => minuteToX(g.start_minute) + 3)
-  const anchors = [...ideal]
-  for (let i = 0; i < n; i++) {
-    anchors[i] = Math.max(anchors[i], minX, i > 0 ? anchors[i - 1] + gap : -Infinity)
-  }
-  // Near midnight a label would run off the sheet: let it slide left (with a
-  // leader line) far enough to fit, but not absurdly far from its bracket.
-  const labelRun = (g: RemarkGroup) =>
-    Math.min(remarkText(g, Number.POSITIVE_INFINITY).length * fontSize * MONO_CHAR_WIDTH, (REMARKS.bottom - REMARKS.textTop) / sin) * cos
-  const caps = groups.map((g, i) => Math.min(maxX, Math.max(REMARKS.rightLimit - labelRun(g), ideal[i] - 200)))
-  for (let i = n - 1; i >= 0; i--) {
-    anchors[i] = Math.min(anchors[i], caps[i], i < n - 1 ? anchors[i + 1] - gap : Infinity)
-  }
-  for (let i = 0; i < n; i++) {
-    anchors[i] = Math.max(anchors[i], minX, i > 0 ? anchors[i - 1] + gap : -Infinity)
+  let anchors = [...ideal]
+
+  for (let pass = 0; pass < 3; pass++) {
+    // gaps[i]: baseline distance needed between label i-1 and label i.
+    let gaps = lines.map((ls) => (fontSize * 1.3 + (ls.length - 1) * lineHeight) / sin)
+    const needed = gaps.slice(1).reduce((a, b) => a + b, 0)
+    // Shrink the gaps if a pathological number of remarks would not otherwise fit.
+    if (needed > maxX - minX) gaps = gaps.map((g) => (g * (maxX - minX)) / needed)
+
+    // Near midnight a label would run off the sheet: let it slide left (with a leader line)
+    // far enough to fit, but not absurdly far from its bracket.
+    const labelRun = (i: number) => Math.min(width(lines[i], fontSize), roomY(lines[i].length)) * cos + ascent * sin
+    const caps = groups.map((_, i) => Math.min(maxX, Math.max(REMARKS.rightLimit - labelRun(i), ideal[i] - 200)))
+    anchors = [...ideal]
+    for (let i = 0; i < n; i++) anchors[i] = Math.max(anchors[i], minX, i > 0 ? anchors[i - 1] + gaps[i] : -Infinity)
+    for (let i = n - 1; i >= 0; i--) anchors[i] = Math.min(anchors[i], caps[i], i < n - 1 ? anchors[i + 1] - gaps[i + 1] : Infinity)
+    for (let i = 0; i < n; i++) anchors[i] = Math.max(anchors[i], minX, i > 0 ? anchors[i - 1] + gaps[i] : -Infinity)
+
+    const next = lines.map((ls, i) =>
+      ls.length === 1 && wrapped[i].length > 1 && width(ls, minFontSize) > room(anchors[i], 1) ? wrapped[i] : ls,
+    )
+    if (next.every((ls, i) => ls === lines[i])) break
+    lines = next
   }
 
-  const anchorY = REMARKS.textTop
   return groups.map((group, i) => {
     const anchorX = anchors[i]
-    const roomX = (REMARKS.rightLimit - anchorX) / cos
-    const roomY = (REMARKS.bottom - anchorY) / sin
-    const room = Math.min(roomX, roomY)
-    // Shrink first, and truncate only as a last resort.
-    const full = remarkText(group, Number.POSITIVE_INFINITY)
-    const size = Math.max(minFontSize, Math.min(fontSize, room / (Math.max(1, full.length) * MONO_CHAR_WIDTH)))
-    const maxChars = Math.floor(room / (size * MONO_CHAR_WIDTH))
+    const fit = room(anchorX, lines[i].length) / (width(lines[i], 1) || 1)
+    const size = Math.max(REMARK_MIN_FONT, Math.min(fontSize, fit))
     return {
       group,
       startX: minuteToX(group.start_minute),
       anchorX,
       anchorY,
-      text: remarkText(group, maxChars),
-      fontSize: Math.round(size * 10) / 10,
+      text: texts[i],
+      lines: lines[i],
+      fontSize: Math.floor(size * 10) / 10,
+      lineHeight,
       displaced: Math.abs(anchorX - ideal[i]) > 1.5,
     }
   })
@@ -367,9 +393,9 @@ export function labelCorners(layout: RemarkLayout, angleDeg = 45): Array<[number
   const uy = Math.sin(a) // along the text
   const nx = Math.sin(a)
   const ny = -Math.cos(a) // "up" from the baseline
-  const len = layout.text.length * layout.fontSize * MONO_CHAR_WIDTH
+  const len = Math.max(...layout.lines.map((l) => l.length)) * layout.fontSize * MONO_CHAR_WIDTH
   const up = layout.fontSize * 0.75
-  const down = layout.fontSize * 0.25
+  const down = layout.fontSize * 0.25 + (layout.lines.length - 1) * layout.lineHeight
   const p = (t: number, h: number): [number, number] => [layout.anchorX + ux * t + nx * h, layout.anchorY + uy * t + ny * h]
   return [p(0, -down), p(len, -down), p(len, up), p(0, up)]
 }
@@ -404,4 +430,20 @@ export function restartState(remarks: readonly LogRemark[], cycleUsed: number): 
   if (restarts.length === 0) return null
   const done = restarts.some((rm) => rm.end_minute < MINUTES_PER_DAY || (rm.end_minute >= MINUTES_PER_DAY && cycleUsed === 0))
   return done ? 'completed' : 'in-progress'
+}
+
+/**
+ * Recap values for the 70-hour/8-day block. The API gives cycle hours used (carried-in hours
+ * included, no roll-off) but no per-day history for the carried-in hours, so A (last 7 days)
+ * and C (last 8 days) both show that conservative total; B = 70 - A.
+ */
+export function recapValues(log: Pick<DailyLog, 'segments' | 'cycle_hours_used'>): {
+  onDutyTodayMinutes: number
+  a: number
+  b: number
+  c: number
+} {
+  const rounded = roundedMinutesByStatus(minutesByStatus(log.segments))
+  const used = Math.max(0, log.cycle_hours_used)
+  return { onDutyTodayMinutes: rounded.D + rounded.ON, a: used, b: Math.max(0, 70 - used), c: used }
 }

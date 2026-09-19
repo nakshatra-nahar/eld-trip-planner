@@ -1,4 +1,5 @@
-"""Offline nearest-place lookup ("City, ST") for log-sheet remarks and stop labels.
+"""Offline nearest-place lookup ("City, ST") for log-sheet remarks and stop labels,
+plus each place's IANA time zone for local stop times.
 
 The dataset (``trips/data/places.csv.gz``, built by ``scripts/build_places.py``) holds
 ~23k US/CA populated places. It is loaded lazily on first use and indexed into a
@@ -43,6 +44,7 @@ class Place:
     lat: float
     lon: float
     population: int
+    tz: str = ""  # IANA time zone, e.g. "America/Chicago"
 
     @property
     def label(self) -> str:
@@ -64,7 +66,7 @@ class PlaceIndex:
     def from_csv_gz(cls, path: Path) -> PlaceIndex:
         with gzip.open(path, "rt", encoding="utf-8", newline="") as fh:
             places = [
-                Place(r["name"], r["admin"], float(r["lat"]), float(r["lon"]), int(r["population"] or 0))
+                Place(r["name"], r["admin"], float(r["lat"]), float(r["lon"]), int(r["population"] or 0), r["tz"])
                 for r in csv.DictReader(fh)
             ]
         return cls(places)
@@ -75,6 +77,19 @@ class PlaceIndex:
             for dx in range(-r, r + 1):
                 if max(abs(dy), abs(dx)) == r:
                     yield from self._cells.get((cy + dy, cx + dx), ())
+
+    def within(self, lat: float, lon: float, radius_mi: float) -> list[tuple[Place, float]]:
+        """Every place within ``radius_mi`` of (lat, lon), as (place, distance_miles)."""
+        cy, cx = self._cell(lat, lon)
+        cell_mi = CELL_DEG * 69.0 * max(math.cos(math.radians(min(abs(lat) + CELL_DEG, 89.0))), 0.05)
+        rings = min(MAX_RING, math.ceil(radius_mi / cell_mi))
+        found = []
+        for r in range(rings + 1):
+            for p in self._ring(cy, cx, r):
+                d = haversine_miles(lat, lon, p.lat, p.lon)
+                if d <= radius_mi:
+                    found.append((p, d))
+        return found
 
     def nearest(self, lat: float, lon: float, prefer_populous: bool = True) -> tuple[Place, float] | None:
         """Return (place, distance_miles) for the best place near (lat, lon), or None."""
@@ -131,6 +146,20 @@ def nearest_place(lat: float, lon: float, prefer_populous: bool = True) -> tuple
         return None
     place, dist = found
     return place.name, place.admin, dist
+
+
+FALLBACK_TZ = "UTC"  # only for points with no place within MAX_RING cells (far outside US/CA)
+
+
+@lru_cache(maxsize=4096)
+def _timezone_at(lat_r: float, lon_r: float) -> str:
+    found = get_index().nearest(lat_r, lon_r, prefer_populous=False)
+    return (found[0].tz if found else "") or FALLBACK_TZ
+
+
+def timezone_at(lat: float, lon: float) -> str:
+    """IANA time zone at (lat, lon): the zone of the nearest populated place."""
+    return _timezone_at(round(lat, 2), round(lon, 2))
 
 
 def highway_ref(road: str | None) -> str:
