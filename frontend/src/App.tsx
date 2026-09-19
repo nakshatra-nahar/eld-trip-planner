@@ -234,6 +234,8 @@ export default function App() {
         const query = planQueryOf(result)
         writeCachedPlan(query, result)
         const entry: HistoryEntry = { view: 'results' }
+        // A "New trip" form entry now holds the trip just entered: Back should return to it, not a blank form.
+        if (history === 'push' && historyEntry()?.fresh) window.history.replaceState({ view: 'form' } satisfies HistoryEntry, '')
         if (history === 'push') window.history.pushState(entry, '', pageUrl(query, tabRef.current))
         else if (history === 'replace') window.history.replaceState(entry, '', pageUrl(query, tabRef.current))
         setIsSample(false)

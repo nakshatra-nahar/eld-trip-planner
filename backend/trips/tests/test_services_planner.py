@@ -62,10 +62,12 @@ def assert_plan_response_contract(body: dict) -> None:
         for ins in leg["instructions"]:
             assert set(ins) == INSTRUCTION
     for ev in body["timeline"]:
-        assert set(ev) == TIMELINE_EVENT
+        # "reason" is optional in api.ts but always sent for non-driving events, never for driving.
+        assert set(ev) == TIMELINE_EVENT | ({"reason"} if ev["kind"] != "drive" else set())
         assert set(ev["start_location"]) - {"road"} == PLACE_REF == set(ev["end_location"]) - {"road"}
     for stop in body["stops"]:
-        assert set(stop) == STOP and stop["kind"] != "drive"
+        assert set(stop) == STOP | {"reason"} and stop["kind"] != "drive"
+        assert isinstance(stop["reason"], str) and stop["reason"]
         assert set(stop["location"]) - {"road"} == PLACE_REF
     for log in body["daily_logs"]:
         assert set(log) == DAILY_LOG

@@ -240,3 +240,10 @@ def test_population_needs_a_matching_name(use, fake_response):
     features = [_city("Tinyville", "Missouri", -90.20, 38.63), _city("Tipton", "Missouri", -92.78, 38.656)]
     use(fake_response(200, {"type": "FeatureCollection", "features": features}))
     assert [r["short_label"] for r in geocoding.geocode("Ti")] == ["Tipton, MO", "Tinyville, MO"]
+
+
+def test_new_york_outranks_new_york_mills(use, fake_response):
+    """Photon lists New York Mills, MN first for "New York"; GeoNames calls the city "New York City"."""
+    features = [_city("New York Mills", "Minnesota", -95.376, 46.518), _city("New York", "New York", -74.006, 40.7127)]
+    use(fake_response(200, {"type": "FeatureCollection", "features": features}))
+    assert [r["short_label"] for r in geocoding.geocode("New York")] == ["New York, NY", "New York Mills, MN"]

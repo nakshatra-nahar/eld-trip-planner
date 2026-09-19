@@ -15,7 +15,7 @@ from hypothesis import strategies as st
 from trips.hos import LegProfile, PlanOptions, build_plan, plan_events
 from trips.hos import rules as R
 from trips.hos.audit import audit_events, audit_plan
-from trips.hos.planner import _Planner, build_leg_drives
+from trips.hos.planner import Rule, _Planner, build_leg_drives
 
 K = R.Kind
 
@@ -170,6 +170,115 @@ def assert_fuel_only_when_needed(events, drives, options):
             since += ev.miles
 
 
+RULES_BY_KIND = {
+    K.REST: {Rule.DRIVE_LIMIT, Rule.DUTY_WINDOW, Rule.LIMIT_BEFORE_STOP},
+    K.RESTART: {Rule.CYCLE, Rule.CYCLE_BEFORE_STOP, Rule.EARLY_RESTART},
+    K.BREAK: {Rule.BREAK, Rule.BREAK_WITH_FUEL},
+    K.FUEL: {Rule.FUEL_INTERVAL, Rule.FUEL_SOON, Rule.FUEL_AHEAD},
+    K.PICKUP: {Rule.PICKUP},
+    K.DROPOFF: {Rule.DROPOFF},
+    K.PRE_TRIP: {Rule.PRE_TRIP},
+    K.POST_TRIP: {Rule.POST_TRIP, Rule.POST_TRIP_END},
+}
+
+
+def assert_causes_match_events(events, cycle_hours, prior, options):
+    """Each stop's recorded cause (the source of its ``reason``) agrees with the clocks
+    re-derived from the event list: the reasons state what actually bound."""
+    window_start = None
+    period_drive = drive_since_break = nondriving_run = 0
+    last_drive_end = 0
+    cycle = cycle_hours * 60
+    since_fuel = 0.0
+    horizon = R.FUEL_BEFORE_REST_DRIVING if options.fuel_stop_minutes >= R.BREAK_MINUTES else R.MAX_DRIVING
+
+    def check_rest_cause(c, ev):
+        if c.rule == Rule.DRIVE_LIMIT:
+            assert period_drive == R.MAX_DRIVING, (ev, period_drive)
+        elif c.rule == Rule.DUTY_WINDOW:
+            assert period_drive < R.MAX_DRIVING and window_start is not None, ev
+            assert c.at == window_start + R.DUTY_WINDOW and last_drive_end <= c.at <= ev.start, (ev, c)
+        else:
+            assert c.rule == Rule.LIMIT_BEFORE_STOP and c.left < R.MIN_DRIVE_AFTER_STOP, (ev, c)
+            assert c.stop in ("break", "fuel", "fuel_break"), c
+            if c.limit == "drive":
+                assert c.left == R.MAX_DRIVING - period_drive, (ev, c, period_drive)
+            elif c.limit == "window":
+                assert window_start is not None and c.at == window_start + R.DUTY_WINDOW, (ev, c)
+            else:
+                assert c.limit == "cycle", c
+
+    for i, ev in enumerate(events):
+        c = ev.cause
+        nxt = next((e for e in events[i + 1 :] if e.kind != K.POST_TRIP), None)
+        if ev.kind == K.DRIVE:
+            assert c is None, ev
+        else:
+            assert c is not None and c.rule in RULES_BY_KIND[ev.kind], (i, ev)
+        if ev.kind == K.REST:
+            check_rest_cause(c, ev)
+        if ev.kind == K.RESTART:
+            assert abs(c.cycle - cycle) < 1e-6, (i, c, cycle)
+            assert c.credit == (R.RESTART - ev.duration if ev.start == 0 else 0), (i, ev, c)
+            assert c.credit == 0 or c.credit == prior, (i, c, prior)
+            if c.rule == Rule.EARLY_RESTART:
+                assert (c.instead_of is None) == (ev.start == 0), (i, c)
+                if c.instead_of is not None:
+                    check_rest_cause(c.instead_of, ev)
+            if c.rule == Rule.CYCLE_BEFORE_STOP:
+                assert c.stop in ("pickup", "fuel"), c
+                if c.stop == "pickup":
+                    assert nxt is not None and any(e.kind == K.PICKUP for e in events[i + 1 : i + 4]), (i, c)
+        if ev.kind == K.BREAK:
+            if c.rule == Rule.BREAK:
+                assert drive_since_break == R.BREAK_AFTER_DRIVING, (i, drive_since_break)
+            else:
+                assert events[i - 1].kind == K.FUEL, i
+                assert c.left == R.BREAK_AFTER_DRIVING - drive_since_break <= R.BREAK_EARLY_MINUTES, (i, c)
+        if ev.kind == K.FUEL:
+            assert abs(c.fuel_miles - since_fuel) < 1e-6, (i, c, since_fuel)
+            if c.rule == Rule.FUEL_INTERVAL:
+                assert since_fuel > R.FUEL_INTERVAL_MILES - 5, (i, since_fuel)
+            elif c.rule == Rule.FUEL_SOON:
+                assert R.FUEL_INTERVAL_MILES - since_fuel < R.FUEL_EARLY_MILES + 1e-6, (i, since_fuel)
+            else:
+                assert c.left == horizon and c.stop in ("rest", "restart", "duty_start"), (i, c)
+            if c.stop in ("rest", "restart"):
+                assert nxt is not None and nxt.kind == c.stop, (i, c, nxt)
+            elif c.stop == "pickup":
+                assert nxt is not None and nxt.kind == K.PICKUP, (i, c, nxt)
+            elif c.stop == "duty_start":
+                assert events[i - 1].kind in (K.PRE_TRIP, K.REST, K.RESTART), (i, events[i - 1])
+            if c.as_break:
+                assert options.fuel_stop_minutes >= R.BREAK_MINUTES and c.stop == "break", (i, c)
+                assert drive_since_break == R.BREAK_AFTER_DRIVING, (i, drive_since_break)
+            elif c.stop == "break":
+                assert nxt is not None and nxt.kind in (K.BREAK, K.REST, K.RESTART), (i, c, nxt)
+        if ev.kind == K.POST_TRIP:
+            assert (c.rule == Rule.POST_TRIP_END) == (i == len(events) - 1), (i, c)
+        # advance clocks
+        if ev.status in R.ON_DUTY_STATUSES:
+            if window_start is None:
+                window_start = ev.start
+            cycle += ev.duration
+        if ev.status == R.D:
+            period_drive += ev.duration
+            drive_since_break += ev.duration
+            nondriving_run = 0
+            since_fuel += ev.miles
+            last_drive_end = ev.end
+        else:
+            nondriving_run += ev.duration
+            if nondriving_run >= R.BREAK_MINUTES:
+                drive_since_break = 0
+        if ev.kind == K.FUEL:
+            since_fuel = 0.0
+        if ev.kind in (K.REST, K.RESTART):
+            window_start, period_drive, drive_since_break = None, 0, 0
+            if ev.kind == K.RESTART:
+                cycle = 0
+
+
 def check_trip(legs, cycle, start, options):
     prior = start.hour * 60 + start.minute  # build_plan: off duty since midnight
     events = plan_events(legs, cycle, options, prior_off_duty_minutes=prior)
@@ -177,6 +286,7 @@ def check_trip(legs, cycle, start, options):
     # HOS rules, contiguity, pickup/drop-off exactly 60 min ON.
     assert audit_events(events, cycle, prior) == []
     assert_no_premature_stops(events, cycle, options)
+    assert_causes_match_events(events, cycle, prior, options)
 
     # The restart-placement search never arrives later than the greedy plan.
     greedy = _Planner(build_leg_drives(legs), cycle * 60, options, prior).run()
@@ -201,6 +311,12 @@ def check_trip(legs, cycle, start, options):
     assert summary["end_time"] == end.strftime("%Y-%m-%dT%H:%M")
     assert summary["total_miles"] == round(driven, 1)
     assert len(plan["stops"]) == sum(ev.kind != K.DRIVE for ev in events)
+    # Every stop says why it happens; driving does not.
+    for item in timeline:
+        assert ("reason" in item) == (item["kind"] != K.DRIVE), item
+        assert item.get("reason", "x").strip() != ""
+    by_id = {item["id"]: item for item in timeline}
+    assert all(stop["reason"] == by_id[stop["id"]]["reason"] for stop in plan["stops"])
     assert summary["num_fuel_stops"] == sum(ev.kind == K.FUEL for ev in events)
     assert summary["num_restarts"] == sum(ev.kind == K.RESTART for ev in events)
 

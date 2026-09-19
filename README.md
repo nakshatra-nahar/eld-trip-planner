@@ -43,9 +43,9 @@
 
 **Results**
 - **Truck routing.** Routes come from [Valhalla](https://valhalla.github.io/valhalla/)'s `truck` profile (truck-legal roads and truck speeds) on the FOSSGIS public server, so the trip follows interstates and truck routes. If Valhalla is unavailable the backend falls back to OSRM's car network, marks the route "Car network (OSRM fallback)" and says so in the warnings. It does the same when the truck route detours far beyond the car route (for example where OpenStreetMap marks a border crossing truck-restricted), and the warning gives the detour.
-- A MapLibre map. The drive to pickup and the loaded leg are drawn in different styles. Pins mark each stop (fuel, 30-minute break, 10-hour rest, 34-hour restart, pickup, drop-off, inspections) with a popup for its time window, duration, place and mile marker. Clicking an itinerary row flies the map to that stop.
+- A MapLibre map. The drive to pickup and the loaded leg are drawn in different styles. Pins mark each stop (fuel, 30-minute break, 10-hour rest, 34-hour restart, pickup, drop-off, inspections) with a popup for its time window, duration, place, mile marker and the reason for the stop. Clicking an itinerary row flies the map to that stop.
 - A trip summary with a routing badge ("Truck-routed (Valhalla)"): total miles, driving and on-duty hours, trip length, log-sheet count, fuel stops, rests and restarts, cycle hours left at arrival, and a duty-status timeline bar for the whole trip.
-- An itinerary grouped by calendar day, with per-day totals by duty status. Times are home-terminal time, as on the logs; each stop in another zone also shows its **local time** ("08:19 EDT local"), and a pickup or drop-off between 22:00 and 05:00 local gets an "Outside typical dock hours" chip. A day that holds two duty periods with more than 11:00 of driving in total is explained on the day card and the sheet ("2 duty periods today: 11:00 + 0:45 driving; each ≤ 11 h").
+- An itinerary grouped by calendar day, with per-day totals by duty status. Every non-driving stop says why it happens ("11-hour driving limit reached", "8 hours of driving without a 30-minute interruption", "1,000-mile fuel interval (999 mi on this tank)"). Times are home-terminal time, as on the logs; each stop in another zone also shows its **local time** ("08:19 EDT local"), and a pickup or drop-off between 22:00 and 05:00 local gets an "Outside typical dock hours" chip. A day that holds two duty periods with more than 11:00 of driving in total is explained on the day card and the sheet ("2 duty periods today: 11:00 + 0:45 driving; each ≤ 11 h").
 - **Daily Logs:** one FMCSA-style sheet per calendar day, drawn in SVG. Each sheet has the 24-hour grid and duty line, row totals that add up to 24, remarks brackets naming the city and state (and the highway for a stop outside a city), and the 70-hour/8-day recap (A, B and C). Header fields (driver, carrier, truck and trailer numbers, shipping document) are saved in the browser. Sheets can be printed or saved as PDF (one landscape page per sheet), or downloaded as SVG or PNG.
 - **Directions:** turn-by-turn steps per leg, written in English by our own generator from the Valhalla maneuvers (or OSRM's on the fallback). Runs of city streets before the first and after the last interstate are folded into a "Local streets" row.
 - The layout is responsive down to phone width. It has skeleton loading states, error messages that say what went wrong, visible focus rings and 44 px touch targets.
@@ -173,6 +173,7 @@ Response (`PlanResponse`, abridged):
                  "local_start": "2026-09-21T06:00", "start_tz_abbr": "CDT", "...": "..." }],
   "stops":    [{ "id": "e2", "kind": "pickup", "status": "ON", "label": "Pickup (loading)",
                  "start": "2026-09-21T10:44", "end": "2026-09-21T11:44", "mile_marker": 297.4, "day_number": 1,
+                 "reason": "1 hour on duty for loading, per the trip assumptions",
                  "local_start": "2026-09-21T10:44", "local_tz_abbr": "CDT", "...": "..." }],
   "daily_logs": [{ "date": "2026-09-21", "day_number": 1, "total_miles": 694.1,
                    "segments": [{ "status": "OFF", "start_minute": 0, "end_minute": 360 }, "..."],
@@ -289,7 +290,7 @@ Each block starts from the repository root.
 
 ```bash
 cd backend
-uv run pytest            # about 300 tests, offline (recorded Valhalla, OSRM and Photon fixtures)
+uv run pytest            # about 350 tests, offline (recorded Valhalla, OSRM and Photon fixtures)
 uv run pytest -m live    # optional smoke tests against the real Valhalla, OSRM and Photon
 uvx ruff check .
 ```

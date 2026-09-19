@@ -46,10 +46,52 @@ describe('groupSteps', () => {
 })
 
 describe('interstateOf', () => {
-  it('finds interstates in the road or the instruction', () => {
-    expect(interstateOf({ road: 'I 55', text: '' })).toBe('I-55')
-    expect(interstateOf({ road: '', text: 'Merge onto I-80 W' })).toBe('I-80')
-    expect(interstateOf({ road: 'US 66', text: 'Continue on US 66' })).toBeNull()
+  it("reads the shield from the step's own road", () => {
+    expect(interstateOf({ road: 'I 55' })).toBe('I-55')
+    expect(interstateOf({ road: 'I-80 W' })).toBe('I-80')
+    expect(interstateOf({ road: 'Interstate 10' })).toBe('I-10')
+    expect(interstateOf({ road: 'US 66' })).toBeNull()
+    expect(interstateOf({ road: '' })).toBeNull()
+  })
+
+  it('ignores interstates named only in the instruction text', () => {
+    const toward = step('fork', 'Keep right toward I 5', 'US 101', 12)
+    expect(interstateOf(toward)).toBeNull()
+    expect(interstateOf(step('off ramp', 'Take the I 94 East exit toward Indiana', '', 0.5))).toBeNull()
+    expect(roadCaption(toward)).toBe('US 101')
+  })
+})
+
+describe('groupSteps with ramps', () => {
+  it('stops the local-streets run at a ramp onto an interstate, even when the ramp has no road', () => {
+    const items = groupSteps([
+      step('depart', 'Head south on Federal St', 'Federal St', 0.1),
+      step('turn', 'Turn right onto Van Buren St', 'Van Buren St', 0.2),
+      step('turn', 'Turn left onto Wells St', 'Wells St', 0.1),
+      step('turn', 'Turn right onto Congress Pkwy', 'Congress Pkwy', 0.4),
+      step('off ramp', 'Take the I 94 East exit toward Indiana', '', 0.5),
+      step('fork', 'Keep left to take I 94 East', 'I 94', 20),
+      step('arrive', 'Arrive', '', 0),
+    ])
+    expect(items.map((i) => (i.kind === 'local' ? `local:${i.steps.length}` : i.step.maneuver))).toEqual([
+      'depart',
+      'local:3',
+      'off ramp',
+      'fork',
+      'arrive',
+    ])
+  })
+
+  it('does not end the run at a street step that only points toward an interstate', () => {
+    const items = groupSteps([
+      step('depart', 'Head north on Main St', 'Main St', 0.1),
+      step('turn', 'Turn left onto 1st Ave toward I 5', '1st Ave', 0.2),
+      step('turn', 'Turn right onto Pine St', 'Pine St', 0.1),
+      step('turn', 'Turn right onto 4th Ave', '4th Ave', 0.3),
+      step('on ramp', 'Take the ramp onto I 5 S', 'I 5', 40),
+      step('arrive', 'Arrive', '', 0),
+    ])
+    expect(items.map((i) => i.kind)).toEqual(['step', 'local', 'step', 'step'])
   })
 })
 

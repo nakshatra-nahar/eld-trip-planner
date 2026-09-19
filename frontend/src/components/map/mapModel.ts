@@ -15,6 +15,11 @@ export interface MapPlace {
   title: string
   /** Stops at this location, most important first (by EVENT_KIND priority, then time). */
   stops: Stop[]
+  /**
+   * Endpoint pins only: stops elsewhere that would sit under this pin at the current zoom (see
+   * clusterPlaces). They are listed in the pin's popup instead of drawing a marker under it.
+   */
+  nearby?: Stop[]
 }
 
 export type Bounds = [[number, number], [number, number]]
@@ -102,10 +107,34 @@ export function routeFeatures(plan: PlanResponse): FeatureCollection<LineString,
 /** Stop markers closer than this on screen merge into one marker with a count badge. */
 export const CLUSTER_RADIUS_PX = 28
 
+/** Endpoint pins are 34x44 px, anchored at the tip; stop markers are ~30 px circles. */
+const PIN = { halfWidth: 17, height: 44 }
+const STOP_RADIUS = 16
+const CLEARANCE = 4
+
 /**
- * Merges stop markers (never endpoint pins) that would overlap on screen at the current zoom.
- * Greedy, most important stop first: each marker joins the first cluster whose anchor is within
- * `radius` px, so a cluster sits on its most important stop. `project` maps lng/lat to screen px.
+ * Screen distance (px) from a stop marker's centre to an endpoint pin's outline (the pin's
+ * bounding box, which stands above its tip). Returns null when the marker is clear of the pin,
+ * i.e. the two would not overlap or touch.
+ */
+export function pinOverlap(stop: [number, number], pinTip: [number, number]): number | null {
+  const [x, y] = stop
+  const [px, py] = pinTip
+  const nearestX = Math.min(Math.max(x, px - PIN.halfWidth), px + PIN.halfWidth)
+  const nearestY = Math.min(Math.max(y, py - PIN.height), py)
+  const gap = Math.hypot(x - nearestX, y - nearestY)
+  return gap < STOP_RADIUS + CLEARANCE ? gap : null
+}
+
+/**
+ * Merges markers that would overlap on screen at the current zoom. `project` maps lng/lat to
+ * screen px.
+ *
+ * 1. Stop markers: greedy, most important stop first. Each marker joins the first cluster whose
+ *    anchor is within `radius` px, so a cluster sits on its most important stop.
+ * 2. A stop cluster that would sit under an endpoint pin joins that pin (its `nearby` list, shown
+ *    in the pin's popup) instead of being drawn. Markers never move off their true position:
+ *    shifting one sideways put it off the route, and near a coast out to sea.
  */
 export function clusterPlaces(
   places: readonly MapPlace[],
@@ -120,26 +149,24 @@ export function clusterPlaces(
     if (hit) hit.place = { ...hit.place, stops: [...hit.place.stops, ...place.stops].sort(byPriority) }
     else clusters.push({ at, place })
   }
-  return [...clusters.map((c) => c.place), ...places.filter((p) => p.role)]
-}
 
-/** Endpoint pins are 34x44 px, anchored at the tip; stop markers are ~30 px circles. */
-const PIN = { halfWidth: 17, height: 44 }
-const STOP_RADIUS = 16
-const CLEARANCE = 4
-
-/**
- * Screen offset for a stop marker that sits on (or within a few px of) an endpoint pin, so
- * both stay visible and clickable: the marker slides sideways, to the side it is already on.
- * Returns null when the marker is clear of the pin. Points are screen pixels.
- */
-export function nudgeFromPin(stop: [number, number], pinTip: [number, number]): [number, number] | null {
-  const [x, y] = stop
-  const [px, py] = pinTip
-  const nearestX = Math.min(Math.max(x, px - PIN.halfWidth), px + PIN.halfWidth)
-  const nearestY = Math.min(Math.max(y, py - PIN.height), py)
-  if (Math.hypot(x - nearestX, y - nearestY) >= STOP_RADIUS + CLEARANCE) return null
-  const side = x < px ? -1 : 1
-  const targetX = px + side * (PIN.halfWidth + STOP_RADIUS + CLEARANCE)
-  return [Math.round(targetX - x), 0]
+  const pins = places.filter((p) => p.role).map((place) => ({ tip: project(place.lngLat), place, nearby: [] as Stop[] }))
+  const free: MapPlace[] = []
+  for (const cluster of clusters) {
+    let best: (typeof pins)[number] | null = null
+    let bestGap = Infinity
+    for (const pin of pins) {
+      const gap = pinOverlap(cluster.at, pin.tip)
+      if (gap !== null && gap < bestGap) {
+        best = pin
+        bestGap = gap
+      }
+    }
+    if (best) best.nearby.push(...cluster.place.stops)
+    else free.push(cluster.place)
+  }
+  return [
+    ...free,
+    ...pins.map(({ place, nearby }) => (nearby.length ? { ...place, nearby: nearby.sort(byPriority) } : place)),
+  ]
 }

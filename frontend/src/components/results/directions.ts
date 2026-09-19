@@ -13,12 +13,24 @@ const SHORT_STEP_MILES = 0.5
 
 export type StepItem = { kind: 'step'; step: Instruction } | { kind: 'local'; steps: Instruction[] }
 
-const INTERSTATE = /\bI[\s-]?(\d{1,3})\b/
+const INTERSTATE = /\b(?:I|Interstate)[\s-]?(\d{1,3})\b/
 
-/** "I-55" when the step is on (or onto) an interstate, else null. */
-export function interstateOf(step: Pick<Instruction, 'road' | 'text'>): string | null {
-  const m = INTERSTATE.exec(step.road) ?? INTERSTATE.exec(step.text)
+/**
+ * "I-55" when the step itself is on an interstate, else null. Only the step's own road counts:
+ * the instruction text also names roads the step merely points at ("Keep right toward I 5" on
+ * US 101), which must not get a shield.
+ */
+export function interstateOf(step: Pick<Instruction, 'road'>): string | null {
+  const m = INTERSTATE.exec(step.road)
   return m ? `I-${m[1]}` : null
+}
+
+/**
+ * True when the step is on an interstate or takes one ("Take the I 94 East exit", "Merge onto
+ * I-80 W"), ignoring the "toward ..." destination sign. Marks the end of a leading city-street run.
+ */
+function reachesInterstate(step: Pick<Instruction, 'road' | 'text'>): boolean {
+  return interstateOf(step) !== null || INTERSTATE.test(step.text.replace(/\btoward\b.*$/i, ''))
 }
 
 /**
@@ -41,7 +53,7 @@ export function roadCaption(step: Pick<Instruction, 'road' | 'text' | 'maneuver'
  */
 export function groupSteps(steps: readonly Instruction[]): StepItem[] {
   const n = steps.length
-  const street = (st: Instruction) => !interstateOf(st) && st.maneuver !== 'depart' && st.maneuver !== 'arrive'
+  const street = (st: Instruction) => !reachesInterstate(st) && st.maneuver !== 'depart' && st.maneuver !== 'arrive'
   const miles = (from: number, to: number) => steps.slice(from, to).reduce((a, st) => a + st.distance_miles, 0)
   const head = steps[0]?.maneuver === 'depart' ? 1 : 0
   const tail = n - (n > head && steps[n - 1].maneuver === 'arrive' ? 1 : 0)

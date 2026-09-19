@@ -127,10 +127,12 @@ def _photon_feature(feature: dict[str, Any]) -> dict[str, Any] | None:
 
 def _population(r: dict[str, Any]) -> int:
     """Population of a town result: the largest same-named place in the offline dataset
-    within a few miles (Photon has no population), else 0."""
+    within a few miles (Photon has no population), else 0. GeoNames adds "City" to some
+    names that OpenStreetMap leaves off ("New York City" is OSM's "New York")."""
     key = normalise_name(r[_NAME])
+    names = {key, f"{key} city"}
     nearby = get_index().within(r["lat"], r["lon"], _SAME_PLACE_MILES)
-    return max((p.population for p, _ in nearby if normalise_name(p.name) == key), default=0)
+    return max((p.population for p, _ in nearby if normalise_name(p.name) in names), default=0)
 
 
 def _rank_places(q: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:

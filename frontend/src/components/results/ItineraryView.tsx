@@ -1,6 +1,6 @@
 import { ArrowRight, Clock, Globe2, MoonStar, Scale } from 'lucide-react'
 import { useMemo } from 'react'
-import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND, stopReason } from '../../lib/duty'
+import { DUTY_ORDER, DUTY_STATUS, EVENT_KIND } from '../../lib/duty'
 import { cn } from '../../lib/cn'
 import { formatClock, formatDay, formatDayLong, formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import { localTimeNote, outsideDockHours } from '../../lib/localTime'
@@ -137,7 +137,7 @@ function ItineraryRow({
   const status = DUTY_STATUS[e.status]
   const Icon = kind.icon
   const drive = e.kind === 'drive'
-  const reason = drive ? undefined : stopReason(e)
+  const reason = drive ? undefined : e.reason // why the stop happens, e.g. "11-hour driving limit reached"
   const crossesMidnight = e.start.slice(0, 10) !== e.end.slice(0, 10)
   const local = drive ? null : localTimeNote(e.start, e.local_start, e.start_tz_abbr)
   const dock = (e.kind === 'pickup' || e.kind === 'dropoff') && outsideDockHours(e.local_start ?? e.start)

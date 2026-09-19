@@ -185,3 +185,19 @@ def test_place_refs_carry_city_and_road(plan):
     for log in plan["daily_logs"]:
         for r in log["remarks"]:
             assert r["location"].endswith(r["city"])
+
+
+def test_reason_is_declared_and_sent_for_every_stop(plan, contract):
+    """api.ts declares ``reason?: string`` on TimelineEvent and Stop; the engine sends it for
+    every non-driving event (and its stop), never for driving."""
+    _, _, optionals = contract
+    assert optionals["TimelineEvent"]["reason"] == "string"
+    assert optionals["Stop"]["reason"] == "string"
+    for ev in plan["timeline"]:
+        if ev["kind"] == "drive":
+            assert "reason" not in ev
+        else:
+            assert isinstance(ev["reason"], str) and ev["reason"]
+    by_id = {ev["id"]: ev for ev in plan["timeline"]}
+    for stop in plan["stops"]:
+        assert stop["reason"] == by_id[stop["id"]]["reason"]

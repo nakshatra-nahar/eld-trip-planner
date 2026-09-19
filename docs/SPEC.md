@@ -85,7 +85,8 @@ Every event (`DutyEvent`) records:
 - start and end minutes;
 - start_mile and end_mile (cumulative trip miles);
 - leg_index;
-- start and end coordinates, interpolated from the leg profile.
+- start and end coordinates, interpolated from the leg profile;
+- for a non-driving event, a `cause`: the rule that scheduled it and the numbers behind it (cycle hours used, off-duty credit since midnight, when the 14-hour window closes, driving left, miles on the tank, where fuel is taken). It is recorded where the planner makes the decision, and `logs.py` turns it into the `reason` sentence sent on every non-driving `TimelineEvent` and `Stop` (e.g. "11-hour driving limit reached", "1,000-mile fuel interval (999 mi on this tank)"). Driving events have no `reason`.
 
 ### Leg profile (`profile.py`)
 Built from the route leg (Valhalla shape, each maneuver's time spread over its shape segments by distance; or the OSRM annotation arrays on the fallback):

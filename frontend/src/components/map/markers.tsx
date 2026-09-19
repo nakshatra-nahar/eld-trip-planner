@@ -1,6 +1,7 @@
 import type { PointerEvent } from 'react'
 import { DUTY_HEX, EVENT_KIND, ROLE_ICON } from '../../lib/duty'
 import { cn } from '../../lib/cn'
+import type { Stop } from '../../types/api'
 import type { EndpointRole, MapPlace } from './mapModel'
 
 /**
@@ -20,12 +21,14 @@ const ROLE_STYLE: Record<EndpointRole, { fill: string; label: string }> = {
 interface EndpointPinProps {
   role: EndpointRole
   label: string
+  /** Stops drawn under this pin at the current zoom (listed in its popup); shown as a count badge. */
+  nearby?: readonly Stop[]
   active?: boolean
   onHover?: (hovering: boolean) => void
 }
 
 /** Teardrop pin for the current, pickup and dropoff locations. Clicks are handled by the parent Marker. */
-export function EndpointPin({ role, label, active = false, onHover }: EndpointPinProps) {
+export function EndpointPin({ role, label, nearby = [], active = false, onHover }: EndpointPinProps) {
   const Icon = ROLE_ICON[role]
   const style = ROLE_STYLE[role]
   const interactive = Boolean(onHover)
@@ -33,7 +36,7 @@ export function EndpointPin({ role, label, active = false, onHover }: EndpointPi
   return (
     <Tag
       {...(interactive ? { type: 'button' as const } : {})}
-      aria-label={`${style.label}: ${label}`}
+      aria-label={`${style.label}: ${label}${nearby.length ? `, also nearby: ${nearby.map((s) => s.label).join(', ')}` : ''}`}
       onPointerEnter={mouseOnly(onHover)}
       onPointerLeave={mouseOnly(onHover, false)}
       onFocus={() => onHover?.(true)}
@@ -57,6 +60,14 @@ export function EndpointPin({ role, label, active = false, onHover }: EndpointPi
       </span>
       {role === 'current' && (
         <span className="absolute top-[3px] left-1/2 size-[26px] -translate-x-1/2 rounded-full ring-2 ring-hw-400/80" aria-hidden />
+      )}
+      {nearby.length > 0 && (
+        <span
+          className="tabular absolute -top-1 -right-2 grid h-4 min-w-4 place-items-center rounded-full bg-white px-1 text-[10px] leading-none font-bold text-ink-900 shadow-[0_1px_3px_rgb(8_14_28/0.35)] ring-1 ring-ink-900/15"
+          aria-hidden
+        >
+          +{nearby.length}
+        </span>
       )}
     </Tag>
   )

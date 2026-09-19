@@ -104,6 +104,7 @@ export interface TimelineEvent {
   local_end?: string // wall-clock time at end_location's zone (always sent)
   start_tz_abbr?: string // e.g. "EDT" (always sent)
   end_tz_abbr?: string // (always sent)
+  reason?: string // why this stop happens (always sent for non-driving events), e.g. "11-hour driving limit reached"
 }
 
 export interface Stop {
@@ -120,6 +121,7 @@ export interface Stop {
   local_start?: string // wall-clock time in the stop's own time zone (always sent)
   local_end?: string // (always sent)
   local_tz_abbr?: string // e.g. "EDT" (always sent)
+  reason?: string // why this stop happens (always sent for non-driving events)
 }
 
 export interface LogSegment {

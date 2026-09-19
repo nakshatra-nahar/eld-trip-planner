@@ -8,7 +8,7 @@ so miles are exact at every leg end and no rounding drift accumulates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import ceil, floor, inf
 
 from . import rules as R
@@ -33,6 +33,49 @@ class PlanOptions:
         self.include_inspections = bool(self.include_inspections)
 
 
+class Rule:
+    """Why a non-driving event happens: the planner decision that scheduled it (see ``Cause``)."""
+
+    DRIVE_LIMIT = "drive_limit"  # 10-h rest: 11 h of driving in the duty period
+    DUTY_WINDOW = "duty_window"  # 10-h rest: the 14-h window closed (``at``)
+    LIMIT_BEFORE_STOP = "limit_before_stop"  # 10-h rest: too little driving (``left``) would follow ``stop``
+    CYCLE = "cycle"  # 34-h restart: the 70-h cycle cannot carry the trip on (``cycle``)
+    CYCLE_BEFORE_STOP = "cycle_before_stop"  # 34-h restart: on-duty ``stop`` would leave no cycle to drive
+    EARLY_RESTART = "early_restart"  # optional 34-h restart (instead of ``instead_of``, or at the start)
+    BREAK = "break"  # 30-min break: 8 h of driving without a 30-min interruption
+    BREAK_WITH_FUEL = "break_with_fuel"  # 30-min break taken at a fuel stop, due in ``left`` of driving
+    FUEL_INTERVAL = "fuel_interval"  # fuel: the 1,000-mile interval is reached
+    FUEL_SOON = "fuel_soon"  # fuel: due within FUEL_EARLY_MILES, taken at ``stop``
+    FUEL_AHEAD = "fuel_ahead"  # fuel: the next ``left`` of driving would need it, taken at ``stop``
+    PICKUP = "pickup"
+    DROPOFF = "dropoff"
+    PRE_TRIP = "pre_trip"
+    POST_TRIP = "post_trip"  # ends a duty period
+    POST_TRIP_END = "post_trip_end"  # ends the trip
+
+
+@dataclass(frozen=True)
+class Cause:
+    """The rule that scheduled a non-driving event, with the numbers behind it.
+
+    Recorded where the planner makes the decision; ``logs`` turns it into the ``reason``
+    sentence. Fields other than ``rule`` are set only by the rules that use them.
+    """
+
+    rule: str
+    cycle: float = 0.0  # on-duty minutes in the 70-h cycle as the (re)start begins
+    credit: int = 0  # off-duty minutes before the trip counted toward an opening restart
+    at: int = 0  # trip minute the 14-h window closes (DUTY_WINDOW; LIMIT_BEFORE_STOP on "window")
+    left: float = 0.0  # driving minutes: what would follow ``stop``, or until the rule binds
+    limit: str = ""  # LIMIT_BEFORE_STOP: the binding limit, "drive" | "window" | "cycle"
+    # The stop the rule refers to: "break" | "fuel" | "fuel_break" | "pickup" (a stop avoided)
+    # or, for fuel, where it is taken: "break" | "rest" | "restart" | "pickup" | "duty_start".
+    stop: str = ""
+    fuel_miles: float = 0.0  # miles driven on the tank before this fuel stop
+    as_break: bool = False  # a >= 30-min fuel stop that is also the 8-h break
+    instead_of: Cause | None = None  # EARLY_RESTART mid-trip: the 10-h rest it replaces
+
+
 @dataclass(frozen=True)
 class DutyEvent:
     """One contiguous activity. Minutes are from the trip start; miles are cumulative trip miles."""
@@ -51,6 +94,7 @@ class DutyEvent:
     # Driving events only: integer progress (minutes into the leg's driving time).
     progress_start: int = 0
     progress_end: int = 0
+    cause: Cause | None = None  # why a non-driving event happens (None for driving)
 
     @property
     def duration(self) -> int:
@@ -181,14 +225,14 @@ class _Planner:
 
     # ----- event recording ----------------------------------------------------
 
-    def _stationary(self, kind: str, status: str, minutes: int) -> None:
-        """Record a non-driving event at the current position."""
+    def _stationary(self, kind: str, status: str, minutes: int, cause: Cause) -> None:
+        """Record a non-driving event at the current position, with the rule that caused it."""
         trip_mile, leg_mile, coord = self._position()
         start = self.t
         self.t += minutes
         self.events.append(
             DutyEvent(kind, status, start, self.t, trip_mile, trip_mile, self.event_leg,
-                      coord, coord, leg_mile, leg_mile)
+                      coord, coord, leg_mile, leg_mile, cause=cause)
         )
         if status in R.ON_DUTY_STATUSES:
             self.cycle += minutes
@@ -225,31 +269,50 @@ class _Planner:
         if self.window_start is not None:
             return
         at_start = not self.events
-        if self._needs_restart() or (at_start and self._optional_restart()):
-            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART - (self.prior_off if at_start else 0))
+        rule = None
+        if self._needs_restart():
+            rule = Rule.CYCLE
+        elif at_start and self._optional_restart():
+            rule = Rule.EARLY_RESTART
+        if rule is not None:
+            credit = self.prior_off if at_start else 0
+            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART - credit,
+                             Cause(rule, cycle=self.cycle, credit=credit))
             self._reset_after_off(restart=True)
         self.window_start = self.t
         if self.opts.include_inspections:
-            self._stationary(R.Kind.PRE_TRIP, R.ON, R.PRE_TRIP_MINUTES)
+            self._stationary(R.Kind.PRE_TRIP, R.ON, R.PRE_TRIP_MINUTES, Cause(Rule.PRE_TRIP))
         fuel = self.opts.fuel_stop_minutes
         if self._fuel_before_rest() and self._cycle_allows(fuel) and not self._restart_before_stop(fuel):
-            self._fuel()  # not fueled before the rest (no cycle room then): fuel before driving off
+            # Not fueled before the rest (no cycle room then): fuel before driving off.
+            self._fuel(self._fuel_before_rest_cause("duty_start"))
 
-    def _end_duty_period(self, restart: bool | None = None) -> None:
-        """Post-trip inspection, then a 10-h rest or a 34-h restart (chosen here when None).
+    def _end_duty_period(self, cause: Cause, restart: bool = False) -> None:
+        """Post-trip inspection, then a 10-h rest or a 34-h restart.
 
-        Fuel that the next duty period would soon need is taken first, at the same stop.
+        ``cause``: why the duty period ends. With ``restart`` False it is a 10-h rest's cause,
+        and a restart may still be chosen here (the cause then says so); with ``restart`` True
+        it is the restart's own cause. Fuel that the next duty period would soon need is taken
+        first, at the same stop.
         """
+        fuel_at = None
         if self._fuel_before_rest() and self._cycle_allows(self.opts.fuel_stop_minutes):
-            self._fuel()
-        if restart is None:
-            restart = self._needs_restart() or self._optional_restart()
+            fuel_at = len(self.events)
+            self._fuel(self._fuel_before_rest_cause("rest"))
+        if not restart:
+            if self._needs_restart():
+                restart, cause = True, Cause(Rule.CYCLE)
+            elif self._optional_restart():
+                restart, cause = True, Cause(Rule.EARLY_RESTART, instead_of=cause)
+        if restart and fuel_at is not None:  # the fuel stop's reason names the restart
+            fuel_ev = self.events[fuel_at]
+            self.events[fuel_at] = replace(fuel_ev, cause=replace(fuel_ev.cause, stop="restart"))
         if self.opts.include_inspections and self.window_start is not None:
-            self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES)
+            self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES, Cause(Rule.POST_TRIP))
         if restart:
-            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART)
+            self._stationary(R.Kind.RESTART, R.OFF, R.RESTART, replace(cause, cycle=self.cycle))
         else:
-            self._stationary(R.Kind.REST, self.opts.rest_status, R.RESET_OFF)
+            self._stationary(R.Kind.REST, self.opts.rest_status, R.RESET_OFF, cause)
         self._reset_after_off(restart)
 
     def _reset_after_off(self, restart: bool) -> None:
@@ -388,10 +451,13 @@ class _Planner:
         remaining = self._miles_remaining()
         if remaining <= left + R.MILE_EPS:
             return False  # the tank reaches the drop-off
-        horizon = R.FUEL_BEFORE_REST_DRIVING if self.opts.fuel_stop_minutes >= R.BREAK_MINUTES else R.MAX_DRIVING
-        if self._miles_ahead(horizon) < left - R.MILE_EPS:
+        if self._miles_ahead(self._fuel_horizon()) < left - R.MILE_EPS:
             return False
         return 1 + _fuel_stops_needed(0.0, remaining) <= _fuel_stops_needed(self.miles_since_fuel, remaining)
+
+    def _fuel_horizon(self) -> int:
+        """Driving minutes into the next period within which fuel is taken at the rest before it."""
+        return R.FUEL_BEFORE_REST_DRIVING if self.opts.fuel_stop_minutes >= R.BREAK_MINUTES else R.MAX_DRIVING
 
     def _drive_leg(self, leg_index: int) -> None:
         self.pos_leg, self.progress = leg_index, 0
@@ -415,11 +481,14 @@ class _Planner:
 
         # 1. 70-hour cycle exhausted: 34-hour restart.
         if cycle_room < 1:
-            self._end_duty_period(restart=True)
+            self._end_duty_period(Cause(Rule.CYCLE), restart=True)
             return
         # 2. 11-hour driving or 14-hour window exhausted: 10-hour rest.
-        if self.drive_in_period >= R.MAX_DRIVING or elapsed >= R.DUTY_WINDOW:
-            self._end_duty_period()
+        if self.drive_in_period >= R.MAX_DRIVING:
+            self._end_duty_period(Cause(Rule.DRIVE_LIMIT))
+            return
+        if elapsed >= R.DUTY_WINDOW:
+            self._end_duty_period(Cause(Rule.DUTY_WINDOW, at=self.window_start + R.DUTY_WINDOW))
             return
 
         fuel_room = self._fuel_room(drive)
@@ -431,29 +500,40 @@ class _Planner:
             fuel_now = fuel_due or self._fuel_soon()
             fuel_is_break = fuel_now and fuel >= R.BREAK_MINUTES  # a >= 30-min fuel stop is the break
             stop = fuel if fuel_is_break else R.BREAK_MINUTES + (fuel if fuel_now else 0)
-            after = min(
-                R.MAX_DRIVING - self.drive_in_period,
-                R.DUTY_WINDOW - elapsed - stop,
-                cycle_room - (fuel if fuel_now else 0),  # fueling is on duty
-            )
+            limits = {
+                "drive": R.MAX_DRIVING - self.drive_in_period,
+                "window": R.DUTY_WINDOW - elapsed - stop,
+                "cycle": cycle_room - (fuel if fuel_now else 0),  # fueling is on duty
+            }
+            after = min(limits.values())
             if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
                 # Too little driving would follow the stop: end the period instead.
-                self._end_duty_period()
+                avoided = "fuel" if fuel_is_break else "fuel_break" if fuel_now else "break"
+                self._end_duty_period(self._limit_cause(limits, avoided))
                 return
             if fuel_now:
-                self._fuel_stop()  # a short one is followed by the break at the same place
+                # A short one is followed by the break at the same place.
+                how = self._fuel_cause("break") if fuel_due else self._fuel_soon_cause("break")
+                self._fuel_stop(replace(how, as_break=fuel_is_break))
             if not fuel_is_break and self.window_start is not None:
-                self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES)
+                self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES, Cause(Rule.BREAK))
             return
         # 4. Fuel interval reached.
         if fuel_due:
-            after = min(R.MAX_DRIVING - self.drive_in_period, R.DUTY_WINDOW - elapsed - fuel, cycle_room - fuel)
+            limits = {
+                "drive": R.MAX_DRIVING - self.drive_in_period,
+                "window": R.DUTY_WINDOW - elapsed - fuel,
+                "cycle": cycle_room - fuel,
+            }
+            after = min(limits.values())
             if after < R.MIN_DRIVE_AFTER_STOP and after < leg_left:
-                self._end_duty_period()  # fuel, post-trip and rest at the same stop
+                self._end_duty_period(self._limit_cause(limits, "fuel"))  # fuel, post-trip and rest at one stop
                 return
-            self._fuel_stop()
+            self._fuel_stop(self._fuel_cause(""))
             if fuel < R.BREAK_MINUTES and self.window_start is not None and self._break_due_soon(self.window_start):
-                self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES)  # rather than a stop soon after
+                # Rather than a stop soon after.
+                until = R.BREAK_AFTER_DRIVING - self.drive_since_break
+                self._stationary(R.Kind.BREAK, R.OFF, R.BREAK_MINUTES, Cause(Rule.BREAK_WITH_FUEL, left=until))
             return
         # 5. Drive until the first limit binds.
         chunk = min(
@@ -477,16 +557,38 @@ class _Planner:
         )
         return until <= R.BREAK_EARLY_MINUTES and ahead > until
 
-    def _fuel_stop(self) -> None:
+    def _fuel_stop(self, cause: Cause) -> None:
         """Fuel now, unless that would strand the cycle: then restart first (fuel comes after)."""
         if self._restart_before_stop(self.opts.fuel_stop_minutes):
-            self._end_duty_period(restart=True)
+            self._end_duty_period(Cause(Rule.CYCLE_BEFORE_STOP, stop="fuel"), restart=True)
         else:
-            self._fuel()
+            self._fuel(cause)
 
-    def _fuel(self) -> None:
-        self._stationary(R.Kind.FUEL, R.ON, self.opts.fuel_stop_minutes)
+    def _fuel(self, cause: Cause) -> None:
+        self._stationary(R.Kind.FUEL, R.ON, self.opts.fuel_stop_minutes, cause)
         self.miles_since_fuel = 0.0
+
+    # ----- causes -----------------------------------------------------------------
+
+    def _limit_cause(self, limits: dict[str, float], stop: str) -> Cause:
+        """A rest taken instead of ``stop`` because the tightest of ``limits`` (driving minutes
+        each would allow after the stop) leaves too little driving after it."""
+        limit = min(limits, key=limits.__getitem__)  # ties: the first listed (drive, window, cycle)
+        at = self.window_start + R.DUTY_WINDOW if limit == "window" and self.window_start is not None else 0
+        return Cause(Rule.LIMIT_BEFORE_STOP, limit=limit, left=limits[limit], stop=stop, at=at)
+
+    def _fuel_cause(self, stop: str) -> Cause:
+        """Fuel because the 1,000-mile interval is reached (``stop``: where, if at another stop)."""
+        return Cause(Rule.FUEL_INTERVAL, fuel_miles=self.miles_since_fuel, stop=stop)
+
+    def _fuel_soon_cause(self, stop: str) -> Cause:
+        return Cause(Rule.FUEL_SOON, fuel_miles=self.miles_since_fuel, stop=stop)
+
+    def _fuel_before_rest_cause(self, stop: str) -> Cause:
+        """Why ``_fuel_before_rest`` holds: fuel due soon, or within the next period's first hours."""
+        if self._fuel_soon():
+            return self._fuel_soon_cause(stop)
+        return Cause(Rule.FUEL_AHEAD, fuel_miles=self.miles_since_fuel, stop=stop, left=self._fuel_horizon())
 
     # ----- whole trip -------------------------------------------------------------
 
@@ -498,20 +600,20 @@ class _Planner:
         self.pos_leg, self.progress = 1, 0
         self._ensure_duty_period()
         if self._restart_before_stop(R.PICKUP_MINUTES):
-            self._end_duty_period(restart=True)
+            self._end_duty_period(Cause(Rule.CYCLE_BEFORE_STOP, stop="pickup"), restart=True)
             self._ensure_duty_period()
         if self._fuel_soon() and not self._restart_before_stop(R.PICKUP_MINUTES + self.opts.fuel_stop_minutes):
-            self._fuel()  # fuel at the shipper rather than a few miles down the road
-        self._stationary(R.Kind.PICKUP, R.ON, R.PICKUP_MINUTES)
+            self._fuel(self._fuel_soon_cause("pickup"))  # at the shipper rather than a few miles down the road
+        self._stationary(R.Kind.PICKUP, R.ON, R.PICKUP_MINUTES, Cause(Rule.PICKUP))
 
         self.event_leg = 1
         if leg1.minutes > 0:
             self._drive_leg(1)
         self.pos_leg, self.progress = 1, leg1.minutes
         self._ensure_duty_period()
-        self._stationary(R.Kind.DROPOFF, R.ON, R.DROPOFF_MINUTES)
+        self._stationary(R.Kind.DROPOFF, R.ON, R.DROPOFF_MINUTES, Cause(Rule.DROPOFF))
         if self.opts.include_inspections:
-            self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES)
+            self._stationary(R.Kind.POST_TRIP, R.ON, R.POST_TRIP_MINUTES, Cause(Rule.POST_TRIP_END))
         return _merge_adjacent_drives(self.events)
 
 

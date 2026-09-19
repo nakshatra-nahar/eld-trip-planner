@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from . import rules as R
-from .planner import DutyEvent, LegDrive, PlanOptions, build_leg_drives, plan_drives
+from .planner import Cause, DutyEvent, LegDrive, PlanOptions, Rule, build_leg_drives, plan_drives
 from .profile import LegProfile, LonLat
 
 PlaceNamer = Callable[[float, float, "str | None"], str]  # (lat, lon, road) -> "City, ST"
@@ -79,6 +79,31 @@ def _duration(minutes: float) -> str:
 
 def _miles(miles: float) -> float:
     return round(miles, 1)
+
+
+def _spoken(minutes: int) -> str:
+    """A fixed duration in words: 60 -> "1 hour", 30 -> "30 minutes", 90 -> "1h 30m"."""
+    h, m = divmod(minutes, 60)
+    if m == 0:
+        return f"{h} hour" + ("s" if h != 1 else "")
+    return f"{m} minutes" if h == 0 else _duration(minutes)
+
+
+_RESETS = "34 consecutive hours off resets it"
+_AVOIDED_STOP = {
+    "break": "a 30-minute break",
+    "fuel": "a fuel stop",
+    "fuel_break": "fueling and a 30-minute break",
+    "pickup": "the pickup",
+}
+_FUEL_WHERE = {
+    "break": "fueling at the 30-minute break",
+    "rest": "fueling before the rest",
+    "restart": "fueling before the restart",
+    "pickup": "fueling at the pickup rather than just after it",
+    "duty_start": "fueling before driving off",
+}
+_ALSO_BREAK = "also serves as the 30-minute break due after 8 hours of driving"
 
 
 def _largest_remainder(raw_units: list[float], total_units: int) -> list[int]:
@@ -219,7 +244,7 @@ class _PlanBuilder:
     def timeline(self) -> list[dict]:
         out = []
         for ev in self.events:
-            out.append({
+            item = {
                 "id": self.ids[id(ev)],
                 "kind": ev.kind,
                 "status": ev.status,
@@ -233,8 +258,93 @@ class _PlanBuilder:
                 "leg_index": ev.leg_index,
                 "start_location": self._place_ref(ev.start_coord, ev.leg_index, self._pos_leg_mile(ev, True)),
                 "end_location": self._place_ref(ev.end_coord, ev.leg_index, self._pos_leg_mile(ev, False)),
-            })
+            }
+            reason = self._reason(ev)
+            if reason:
+                item["reason"] = reason
+            out.append(item)
         return out
+
+    # ----- reasons ----------------------------------------------------------------------
+
+    def _hhmm(self, minute: int) -> str:
+        return self._clock(minute)[11:]
+
+    def _cycle_state(self, cycle: float) -> str:
+        if round(cycle) >= R.CYCLE_LIMIT:
+            return f"70-hour/8-day cycle used up ({_duration(cycle)})"
+        return f"70-hour/8-day cycle nearly used up ({_duration(cycle)} of 70h)"
+
+    def _rest_reason(self, c: Cause) -> str:
+        if c.rule == Rule.DRIVE_LIMIT:
+            return "11-hour driving limit reached"
+        if c.rule == Rule.DUTY_WINDOW:
+            return f"14-hour duty window closes at {self._hhmm(c.at)}"
+        if c.rule == Rule.LIMIT_BEFORE_STOP:
+            limit = {
+                "drive": "11-hour driving limit",
+                "window": f"14-hour duty window closes at {self._hhmm(c.at)}",
+                "cycle": "70-hour cycle",
+            }[c.limit]
+            left = f"only {_duration(c.left)} of driving" if c.left >= 1 else "no driving time"
+            return f"{limit}: {left} would be left after {_AVOIDED_STOP[c.stop]}"
+        raise ValueError(f"not a rest rule: {c.rule!r}")
+
+    def _reason(self, ev: DutyEvent) -> str | None:
+        """One short sentence on why a non-driving event happens (None for driving)."""
+        c = ev.cause
+        if c is None:
+            return None
+        credit = f" (credited with {_duration(c.credit)} off duty since midnight)" if c.credit else ""
+        tank = f"{c.fuel_miles:,.0f} mi on this tank"
+        match c.rule:
+            case Rule.DRIVE_LIMIT | Rule.DUTY_WINDOW | Rule.LIMIT_BEFORE_STOP:
+                return self._rest_reason(c)
+            case Rule.CYCLE:
+                return f"{self._cycle_state(c.cycle)}; {_RESETS}{credit}"
+            case Rule.CYCLE_BEFORE_STOP:
+                return (f"{self._cycle_state(c.cycle)}: no driving time would be left after "
+                        f"{_AVOIDED_STOP[c.stop]}; {_RESETS}")
+            case Rule.EARLY_RESTART if c.instead_of is not None:
+                return (f"Taken here instead of a 10-hour rest ({self._rest_reason(c.instead_of)}) to reset "
+                        f"the 70-hour cycle: the rest of the trip needs more than the "
+                        f"{_duration(R.CYCLE_LIMIT - c.cycle)} left")
+            case Rule.EARLY_RESTART:
+                return (f"Only {_duration(R.CYCLE_LIMIT - c.cycle)} left in the 70-hour cycle and the trip "
+                        f"needs more: restarting before driving arrives earliest{credit}")
+            case Rule.BREAK:
+                return "8 hours of driving without a 30-minute interruption"
+            case Rule.BREAK_WITH_FUEL:
+                return ("Taken at the fuel stop: the 30-minute break would be due after "
+                        f"{_duration(c.left)} more driving")
+            case Rule.FUEL_INTERVAL:
+                interval = f"{R.FUEL_INTERVAL_MILES:,.0f}-mile fuel interval ({tank})"
+                return f"{interval}; {_ALSO_BREAK}" if c.as_break else interval
+            case Rule.FUEL_SOON:
+                due_in = round(R.FUEL_INTERVAL_MILES - c.fuel_miles)
+                due = (f"fuel is due in {due_in:,} mi ({tank})" if due_in >= 1
+                       else f"{R.FUEL_INTERVAL_MILES:,.0f}-mile fuel interval ({tank})")
+                if c.as_break:
+                    return f"30-minute break due after 8 hours of driving, taken as a fuel stop: {due}"
+                return f"{due[0].upper()}{due[1:]}: {_FUEL_WHERE[c.stop]}"
+            case Rule.FUEL_AHEAD if c.stop == "duty_start":
+                due_in = max(1, round(R.FUEL_INTERVAL_MILES - c.fuel_miles))
+                return f"Fueling before driving off: fuel is due in {due_in:,} mi ({tank})"
+            case Rule.FUEL_AHEAD:
+                due_in = max(1, round(R.FUEL_INTERVAL_MILES - c.fuel_miles))
+                return (f"Fueling before the {c.stop}: fuel is due in {due_in:,} mi, early in the next "
+                        f"duty period ({tank})")
+            case Rule.PICKUP:
+                return f"{_spoken(R.PICKUP_MINUTES)} on duty for loading, per the trip assumptions"
+            case Rule.DROPOFF:
+                return f"{_spoken(R.DROPOFF_MINUTES)} on duty for unloading, per the trip assumptions"
+            case Rule.PRE_TRIP:
+                return f"Starts every duty period: {_spoken(R.PRE_TRIP_MINUTES)} on duty (inspections are on)"
+            case Rule.POST_TRIP:
+                return f"Ends every duty period: {_spoken(R.POST_TRIP_MINUTES)} on duty (inspections are on)"
+            case Rule.POST_TRIP_END:
+                return f"Ends the trip: {_spoken(R.POST_TRIP_MINUTES)} on duty (inspections are on)"
+        raise ValueError(f"unknown rule {c.rule!r}")
 
     def _pos_leg_mile(self, ev: DutyEvent, start: bool) -> float:
         # The pickup is recorded on leg 0 but positioned at leg 1's start: an endpoint either way.
@@ -247,7 +357,7 @@ class _PlanBuilder:
         for ev, item in zip(self.events, timeline, strict=True):
             if ev.kind == R.Kind.DRIVE:
                 continue
-            out.append({
+            stop = {
                 "id": item["id"],
                 "kind": ev.kind,
                 "status": ev.status,
@@ -258,7 +368,10 @@ class _PlanBuilder:
                 "mile_marker": item["start_mile"],
                 "day_number": self._day_of(ev.start) + 1,
                 "location": item["start_location"],
-            })
+            }
+            if "reason" in item:
+                stop["reason"] = item["reason"]
+            out.append(stop)
         return out
 
     def daily_logs(self, timeline: list[dict], total_miles: float) -> list[dict]:
