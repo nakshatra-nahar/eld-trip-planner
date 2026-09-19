@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.hypothesis/
+backend/db.sqlite3
+backend/staticfiles/
+# Node
+node_modules/
+frontend/dist/
+# Env / OS / tooling
+.env
+.env.*
+!.env.example
+.DS_Store
+.vercel
+test-results/
+playwright-report/
