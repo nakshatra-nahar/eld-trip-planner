@@ -1,7 +1,7 @@
 [project]
 name = "eld-backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "ELD trip planner API: HOS-compliant trip plans, routes and FMCSA daily logs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

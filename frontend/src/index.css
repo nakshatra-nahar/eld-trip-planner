@@ -1,111 +1,204 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+@import 'tailwindcss';
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+/*
+ * RouteLog design tokens.
+ * Ink/navy base, one warm "highway" orange accent, and a fixed duty-status palette
+ * (OFF slate, SB indigo, D emerald, ON amber) shared by map, itinerary, charts and logs.
+ */
+@theme {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Overpass', 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --color-ink-950: #080e1c;
+  --color-ink-900: #0f1729;
+  --color-ink-800: #1a2540;
+  --color-ink-700: #2a3754;
+  --color-ink-600: #445170;
+  --color-ink-500: #637091;
+  --color-ink-400: #8e98b0;
+  --color-ink-300: #bcc3d2;
+  --color-ink-200: #dde1ea;
+  --color-ink-150: #e8ebf1;
+  --color-ink-100: #f0f2f6;
+  --color-ink-50: #f7f8fa;
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
+  --color-hw-50: #fff6ed;
+  --color-hw-100: #ffe8d1;
+  --color-hw-200: #fecd9f;
+  --color-hw-300: #fcaa63;
+  --color-hw-400: #f98a35;
+  --color-hw-500: #ef6c11;
+  --color-hw-600: #d4550a;
+  --color-hw-700: #a9400c;
+
+  --color-duty-off: #64748b;
+  --color-duty-off-soft: #eef1f5;
+  --color-duty-sb: #4f46e5;
+  --color-duty-sb-soft: #eceafd;
+  --color-duty-d: #059669;
+  --color-duty-d-soft: #e3f6ee;
+  --color-duty-on: #d97706;
+  --color-duty-on-soft: #fdf1dc;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+
+  --shadow-card: 0 1px 0 rgb(15 23 41 / 0.04), 0 1px 3px rgb(15 23 41 / 0.06), 0 8px 24px -12px rgb(15 23 41 / 0.12);
+  --shadow-pop: 0 12px 32px -8px rgb(8 14 28 / 0.28), 0 2px 6px rgb(8 14 28 / 0.08);
+
+  --radius-card: 14px;
+
+  --animate-fade-up: fade-up 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -400px 0;
+    }
+    to {
+      background-position: 400px 0;
+    }
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
   }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+  body {
+    @apply bg-ink-100 font-sans text-ink-900 antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+    min-width: 320px;
   }
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+  /* Faint survey-grid texture behind the app, a nod to the log-sheet graph grid. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgb(15 23 41 / 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(15 23 41 / 0.035) 1px, transparent 1px);
+    background-size: 24px 24px;
+    mask-image: linear-gradient(to bottom, black, transparent 520px);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-hw-500);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-hw-200);
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
   }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom range slider: filled track is driven by --fill (0-100%). */
+@utility range-track {
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--range-color, var(--color-ink-800)) 0 var(--fill, 0%),
+    var(--color-ink-200) var(--fill, 0%) 100%
+  );
+  cursor: pointer;
+  &::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: white;
+    border: 2px solid var(--range-color, var(--color-ink-800));
+    box-shadow: 0 1px 4px rgb(8 14 28 / 0.25);
+    transition: transform 120ms;
+  }
+  &::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+  }
+  &::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: white;
+    border: 2px solid var(--range-color, var(--color-ink-800));
+    box-shadow: 0 1px 4px rgb(8 14 28 / 0.25);
   }
 }
-p {
-  margin: 0;
+
+@utility skeleton {
+  background-color: var(--color-ink-150);
+  background-image: linear-gradient(90deg, transparent 0, rgb(255 255 255 / 0.65) 50%, transparent 100%);
+  background-size: 400px 100%;
+  background-repeat: no-repeat;
+  animation: var(--animate-shimmer);
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+/* ---------- MapLibre chrome, restyled to match the app ---------- */
+.maplibregl-popup-content {
+  padding: 0 !important;
+  border-radius: 12px !important;
+  box-shadow: var(--shadow-pop) !important;
+  font-family: var(--font-sans);
+}
+.maplibregl-popup-tip {
+  border-top-color: white !important;
+  border-bottom-color: white !important;
+}
+.maplibregl-ctrl-group {
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-card) !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-attrib {
+  font-family: var(--font-sans);
+  font-size: 11px;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* App chrome is hidden when printing; the log-sheet component owns its own print layout. */
+@media print {
+  [data-print-hide] {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+  body::before {
+    display: none;
+  }
 }

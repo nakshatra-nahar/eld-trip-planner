@@ -1,0 +1,315 @@
+/* Daily Logs view. Everything is scoped under .ls-* so it cannot leak into the app.
+   Colours follow the app's status palette: OFF slate, SB indigo, D emerald, ON amber. */
+
+.ls-view {
+  --ls-ink: #0f1b2d;
+  --ls-muted: #5b6475;
+  --ls-line: #e3e6ec;
+  --ls-surface: #ffffff;
+  --ls-sunken: #f5f6f8;
+  --ls-accent: #e8850c;
+  --ls-accent-ink: #9a4f00;
+  --ls-focus: #2563eb;
+  --ls-off: #64748b;
+  --ls-sb: #4f46e5;
+  --ls-d: #059669;
+  --ls-on: #d97706;
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--ls-ink);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.ls-empty {
+  margin: 0;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ls-muted);
+}
+
+/* ---------- Toolbar ---------- */
+
+.ls-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.ls-days {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ls-pills {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--ls-sunken);
+  border: 1px solid var(--ls-line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  min-width: 0;
+}
+
+.ls-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 72px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ls-muted);
+  font: inherit;
+  line-height: 1.15;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.ls-pill:hover {
+  color: var(--ls-ink);
+  background: rgba(15, 27, 45, 0.05);
+}
+
+.ls-pill[data-active] {
+  background: var(--ls-surface);
+  color: var(--ls-ink);
+  box-shadow: 0 1px 2px rgba(15, 27, 45, 0.08), 0 0 0 1px rgba(15, 27, 45, 0.06), inset 0 -2px 0 var(--ls-accent);
+}
+
+.ls-pill-day {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.ls-pill-date {
+  font-size: 11.5px;
+  opacity: 0.8;
+}
+
+.ls-toggle,
+.ls-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ls-line);
+  background: var(--ls-surface);
+  color: var(--ls-ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.ls-toggle:hover,
+.ls-btn:hover {
+  background: var(--ls-sunken);
+}
+
+.ls-toggle[aria-pressed='true'] {
+  border-color: var(--ls-accent);
+  background: #fff6ea;
+  color: var(--ls-accent-ink);
+}
+
+.ls-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ls-btn-primary {
+  background: var(--ls-ink);
+  border-color: var(--ls-ink);
+  color: #fff;
+}
+
+.ls-btn-primary:hover {
+  background: #1d2d46;
+}
+
+.ls-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.ls-pill:focus-visible,
+.ls-toggle:focus-visible,
+.ls-btn:focus-visible {
+  outline: 2px solid var(--ls-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- Legend ---------- */
+
+.ls-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--ls-line);
+  border-radius: 12px;
+  background: var(--ls-surface);
+  font-size: 13px;
+}
+
+.ls-legend-scope {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ls-muted);
+  margin-right: 4px;
+}
+
+.ls-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ls-legend-label {
+  color: var(--ls-muted);
+}
+
+.ls-legend-value {
+  font-weight: 650;
+  font-family: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.ls-legend-miles {
+  margin-left: auto;
+}
+
+.ls-swatch {
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.ls-swatch-OFF { background: var(--ls-off); }
+.ls-swatch-SB { background: var(--ls-sb); }
+.ls-swatch-D { background: var(--ls-d); }
+.ls-swatch-ON { background: var(--ls-on); }
+
+.ls-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+}
+
+/* ---------- Sheets ---------- */
+
+.ls-sheets {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ls-sheet {
+  margin: 0;
+  border-radius: 6px;
+  background: #fffefa;
+  box-shadow:
+    0 1px 1px rgba(15, 27, 45, 0.04),
+    0 8px 24px -8px rgba(15, 27, 45, 0.18),
+    0 0 0 1px rgba(15, 27, 45, 0.06);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-margin-top: 80px;
+}
+
+.ls-swipe-hint {
+  display: none;
+}
+
+/* On phones keep the form legible: the sheet scrolls inside its card, never the page. */
+@media (max-width: 640px) {
+  .ls-sheet > svg {
+    min-width: 760px;
+  }
+  /* Day pills get their own row so three days fit without clipping; "Show all" wraps below. */
+  .ls-days {
+    flex-wrap: wrap;
+  }
+  .ls-pills {
+    flex: 1 1 100%;
+  }
+  .ls-pill {
+    flex: 1 0 auto;
+    padding: 4px 10px;
+  }
+  .ls-swipe-hint {
+    display: block;
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #64748b;
+  }
+}
+
+/* ---------- Print ---------- */
+
+.ls-print-root {
+  display: none;
+}
+
+@media print {
+  /* Only while DailyLogsView is printing: hide the app, show the portal of sheets. */
+  body.printing-logs > :not(.ls-print-root) {
+    display: none !important;
+  }
+
+  body.printing-logs {
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  body.printing-logs .ls-print-root {
+    display: block;
+  }
+
+  body.printing-logs .ls-print-page {
+    break-after: page;
+    page-break-after: always;
+    break-inside: avoid;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    height: 7.85in;
+    overflow: hidden;
+  }
+
+  body.printing-logs .ls-print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  /* 1100x850 viewBox scaled to fit a landscape letter page inside 0.3in margins. */
+  body.printing-logs .ls-print-page svg {
+    width: auto !important;
+    height: 7.85in !important;
+    max-width: 100%;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

@@ -1,0 +1,193 @@
+"""planner_service orchestration, with the network mocked.
+
+Every test runs the real HOS engine. The orchestration test wraps ``hos.build_plan`` in a
+call-through spy to pin down this layer's own job (resolve -> route -> call the engine
+correctly -> assemble ``PlanResponse``); another checks the full contract end to end.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import pytest
+
+from trips import hos, planner_service
+from trips.serializers import PlanRequestSerializer
+from trips.services import routing
+from trips.services.errors import GeocodeFailed, RouteNotFound
+
+# Key sets of the api.ts interfaces (the JSON contract).
+PLAN_RESPONSE = {"input", "route", "timeline", "stops", "daily_logs", "summary", "assumptions", "warnings"}
+PLAN_INPUT = {"current_location", "pickup_location", "dropoff_location", "current_cycle_used_hours", "start_time", "options"}
+RESOLVED = {"label", "lat", "lon"}
+OPTIONS = {"include_inspections", "rest_status", "fuel_stop_minutes"}
+ROUTE_INFO = {"distance_miles", "duration_hours", "geometry", "legs", "provider"}
+ROUTE_LEG = {"from_role", "to_role", "distance_miles", "duration_hours", "geometry", "instructions"}
+INSTRUCTION = {"text", "maneuver", "modifier", "road", "distance_miles", "duration_minutes", "location"}
+PLACE_REF = {"lat", "lon", "name"}
+TIMELINE_EVENT = {"id", "kind", "status", "label", "start", "end", "duration_hours", "miles", "start_mile",
+                  "end_mile", "leg_index", "start_location", "end_location"}
+STOP = {"id", "kind", "status", "label", "start", "end", "duration_hours", "mile_marker", "day_number", "location"}
+DAILY_LOG = {"date", "day_number", "total_miles", "segments", "totals", "remarks", "on_duty_hours",
+             "cycle_hours_used", "cycle_hours_available", "from_location", "to_location"}
+LOG_SEGMENT = {"status", "start_minute", "end_minute"}
+LOG_REMARK = {"start_minute", "end_minute", "status", "location", "note"}
+SUMMARY = {"total_miles", "total_driving_hours", "total_on_duty_hours", "trip_duration_hours", "start_time",
+           "end_time", "num_days", "num_fuel_stops", "num_breaks", "num_rests", "num_restarts",
+           "cycle_hours_used_at_end", "cycle_hours_available_at_end"}
+
+
+def assert_plan_response_contract(body: dict) -> None:
+    """Structural check of a PlanResponse against frontend/src/types/api.ts."""
+    assert set(body) == PLAN_RESPONSE
+    assert set(body["input"]) == PLAN_INPUT
+    for key in ("current_location", "pickup_location", "dropoff_location"):
+        assert set(body["input"][key]) == RESOLVED
+    assert set(body["input"]["options"]) == OPTIONS
+    route = body["route"]
+    assert set(route) == ROUTE_INFO and len(route["legs"]) == 2
+    assert [(leg["from_role"], leg["to_role"]) for leg in route["legs"]] == [("current", "pickup"), ("pickup", "dropoff")]
+    for leg in route["legs"]:
+        assert set(leg) == ROUTE_LEG
+        assert all(len(p) == 2 for p in leg["geometry"])
+        for ins in leg["instructions"]:
+            assert set(ins) == INSTRUCTION
+    for ev in body["timeline"]:
+        assert set(ev) == TIMELINE_EVENT
+        assert set(ev["start_location"]) == PLACE_REF == set(ev["end_location"])
+    for stop in body["stops"]:
+        assert set(stop) == STOP and stop["kind"] != "drive"
+    for log in body["daily_logs"]:
+        assert set(log) == DAILY_LOG
+        assert set(log["totals"]) == {"OFF", "SB", "D", "ON"}
+        assert all(set(s) == LOG_SEGMENT for s in log["segments"])
+        assert all(set(r) == LOG_REMARK for r in log["remarks"])
+    assert set(body["summary"]) == SUMMARY
+    assert all(isinstance(s, str) for s in body["assumptions"] + body["warnings"])
+
+
+def validated(**overrides) -> dict:
+    payload = {
+        "current_location": {"lat": 41.8781, "lon": -87.6298, "label": "Chicago, IL"},
+        "pickup_location": {"lat": 38.6270, "lon": -90.1994},
+        "dropoff_location": {"query": "Dallas, TX"},
+        "current_cycle_used_hours": 12.5,
+        "start_time": "2026-09-21T08:00",
+    }
+    payload.update(overrides)
+    s = PlanRequestSerializer(data=payload)
+    s.is_valid(raise_exception=True)
+    return s.validated_data
+
+
+DALLAS = {"label": "Dallas, Texas, United States", "short_label": "Dallas, TX", "lat": 32.7767, "lon": -96.797}
+
+
+@pytest.fixture
+def offline(monkeypatch, load_fixture):
+    """Mock geocoding and OSRM; record what the planner asked for."""
+    calls: dict = {"geocode": [], "route": []}
+
+    def fake_geocode_one(q, deadline=None):
+        calls["geocode"].append(q)
+        return DALLAS if "dallas" in q.lower() else None
+
+    def fake_fetch_route(waypoints, deadline=None):
+        calls["route"].append(waypoints)
+        return routing.parse_route(load_fixture("osrm_chicago_stlouis_dallas.json.gz"), "OSRM (test)")
+
+    monkeypatch.setattr(planner_service, "geocode_one", fake_geocode_one)
+    monkeypatch.setattr(planner_service, "fetch_route", fake_fetch_route)
+    return calls
+
+
+def test_orchestration_calls_engine_correctly(monkeypatch, offline):
+    seen: dict = {}
+    real_build_plan = hos.build_plan
+
+    def spy_build_plan(legs, start_time, cycle_used_hours, options, place_namer):
+        seen.update(legs=legs, start_time=start_time, cycle=cycle_used_hours, options=options, namer=place_namer)
+        seen["plan"] = real_build_plan(legs, start_time, cycle_used_hours, options, place_namer)
+        return seen["plan"]
+
+    monkeypatch.setattr(hos, "build_plan", spy_build_plan)
+    body = planner_service.plan_trip(validated(options={"rest_status": "OFF"}))
+
+    # Engine got two truck-adjusted profiles and the parsed inputs.
+    assert [round(p.total_miles) for p in seen["legs"]] == [297, 629]
+    assert seen["start_time"] == datetime(2026, 9, 21, 8, 0)
+    assert seen["cycle"] == 12.5
+    assert (seen["options"].include_inspections, seen["options"].rest_status, seen["options"].fuel_stop_minutes) == (True, "OFF", 30)
+    assert seen["namer"](41.525, -88.0817, "I 80") == "I 80 near Joliet, IL"
+
+    # Only the free-text location was geocoded; OSRM got (lon, lat) waypoints in order.
+    assert offline["geocode"] == ["Dallas, TX"]
+    assert offline["route"] == [[(-87.6298, 41.8781), (-90.1994, 38.627), (-96.797, 32.7767)]]
+
+    assert body["input"] == {
+        "current_location": {"label": "Chicago, IL", "lat": 41.8781, "lon": -87.6298},
+        "pickup_location": {"label": "St. Louis, MO", "lat": 38.627, "lon": -90.1994},
+        "dropoff_location": {"label": "Dallas, TX", "lat": 32.7767, "lon": -96.797},
+        "current_cycle_used_hours": 12.5,
+        "start_time": "2026-09-21T08:00",
+        "options": {"include_inspections": True, "rest_status": "OFF", "fuel_stop_minutes": 30},
+    }
+    route = body["route"]
+    assert route["provider"] == "OSRM (test)"
+    assert route["distance_miles"] == pytest.approx(925.7, abs=0.2)
+    assert route["duration_hours"] == pytest.approx(sum(p.total_minutes for p in seen["legs"]) / 60, abs=0.01)
+    assert len(route["geometry"]) <= planner_service.MAX_DISPLAY_POINTS
+    assert route["geometry"][0] == route["legs"][0]["geometry"][0]
+    assert route["geometry"][-1] == route["legs"][1]["geometry"][-1]
+    assert route["legs"][0]["instructions"][-1]["text"] == "Arrive at pickup (St. Louis, MO)"
+    # Engine output is passed through untouched; routing warnings (none here) go first.
+    for key in ("timeline", "stops", "daily_logs", "summary", "assumptions", "warnings"):
+        assert body[key] == seen["plan"][key]
+
+
+def test_unknown_query_raises_geocode_failed(offline):
+    with pytest.raises(GeocodeFailed) as err:
+        planner_service.plan_trip(validated(pickup_location={"query": "Nowhere-ville 123"}))
+    assert err.value.status == 422
+    assert "pickup_location" in err.value.details
+
+
+def test_route_errors_propagate(monkeypatch, offline):
+    def no_route(waypoints, deadline=None):
+        raise RouteNotFound("No drivable route was found between these locations.")
+
+    monkeypatch.setattr(planner_service, "fetch_route", no_route)
+    with pytest.raises(RouteNotFound):
+        planner_service.plan_trip(validated())
+
+
+def test_zero_length_first_leg_warning(monkeypatch, load_fixture):
+    monkeypatch.setattr(
+        planner_service, "fetch_route",
+        lambda waypoints, deadline=None: routing.parse_route(load_fixture("osrm_joliet_same_pickup.json"), "OSRM (test)"),
+    )
+    body = planner_service.plan_trip(
+        validated(
+            current_location={"lat": 41.525, "lon": -88.0817},
+            pickup_location={"lat": 41.525, "lon": -88.0817},
+            dropoff_location={"lat": 41.7508, "lon": -88.1479},
+        )
+    )
+    assert body["warnings"][0] == "Current location is at the pickup, so there is no driving before pickup."
+    assert body["timeline"][0]["kind"] != "drive" or body["timeline"][0]["leg_index"] == 1
+    assert body["route"]["legs"][0]["distance_miles"] == 0.0
+
+
+def test_real_engine_end_to_end_contract(offline):
+    body = planner_service.plan_trip(validated(current_cycle_used_hours=20))
+    assert_plan_response_contract(body)
+    summary = body["summary"]
+    assert summary["total_miles"] == pytest.approx(body["route"]["distance_miles"], abs=0.2)
+    assert summary["start_time"] == "2026-09-21T08:00"
+    assert summary["num_days"] == len(body["daily_logs"]) >= 2
+    assert {s["kind"] for s in body["stops"]} >= {"pickup", "dropoff", "rest"}
+    pickup = next(s for s in body["stops"] if s["kind"] == "pickup")
+    assert pickup["location"]["name"] == "St. Louis, MO"
+    for log in body["daily_logs"]:
+        assert log["segments"][0]["start_minute"] == 0 and log["segments"][-1]["end_minute"] == 1440
+        assert sum(log["totals"].values()) == pytest.approx(24.0, abs=0.01)
