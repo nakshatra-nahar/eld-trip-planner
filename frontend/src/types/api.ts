@@ -132,12 +132,12 @@ export interface LogSegment {
 
 export interface LogRemark {
   start_minute: number // where the bracket/remark starts on this sheet
-  end_minute: number // end of the bracketed (non-driving) period on this sheet
+  end_minute: number // end of the bracketed (non-driving) period; == start_minute for a flag (trip start/end)
   status: DutyStatus
   location: string // "City, ST", or "I 80 near City, ST" on a highway (PlaceRef.name)
   city?: string // PlaceRef.city (always sent by the API)
   road?: string // PlaceRef.road (omitted when not on a highway)
-  note: string // activity, e.g. "Pickup", "Fuel", "30-minute break", "10-hour rest (cont.)"
+  note: string // activity, e.g. "Pickup", "Fuel", "10-hour rest (cont.)", or a flag's "Start of trip: driving" / "End of trip: off duty"
 }
 
 export interface DailyLog {

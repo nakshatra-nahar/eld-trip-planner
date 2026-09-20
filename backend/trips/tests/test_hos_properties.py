@@ -330,6 +330,23 @@ def check_trip(legs, cycle, start, options):
     for log in logs:
         assert 0 <= log["cycle_hours_available"] <= 70
         assert abs(log["on_duty_hours"] - (log["totals"]["D"] + log["totals"]["ON"])) < 1e-9
+    # Flags (zero-length remarks): the first change from OFF and the final change back to it.
+    flags = [(i, r) for i, log in enumerate(logs) for r in log["remarks"] if r["start_minute"] == r["end_minute"]]
+    notes = [r["note"] for _, r in flags]
+    first_on = events[0].status in R.ON_DUTY_STATUSES
+    start_note = "Start of trip: " + ("driving" if events[0].status == R.D else "on duty")
+    assert notes == ([start_note] if first_on else []) + ["End of trip: off duty"]
+    if first_on:
+        assert (flags[0][0], flags[0][1]["start_minute"]) == (0, start.hour * 60 + start.minute)
+    last_on = max(i for i, ev in enumerate(events) if ev.status in R.ON_DUTY_STATUSES)
+    off_at = datetime.fromisoformat(timeline[last_on]["end"])
+    day, end_flag = flags[-1]
+    sheet_start = datetime.fromisoformat(logs[day]["date"])
+    assert sheet_start + timedelta(minutes=end_flag["start_minute"]) == off_at
+    assert end_flag["location"] == timeline[last_on]["end_location"]["name"]
+    for log in logs:
+        keys = [(r["start_minute"], r["end_minute"]) for r in log["remarks"]]
+        assert keys == sorted(keys)
     driving_hours = sum(log["totals"]["D"] for log in logs)
     assert abs(driving_hours - summary["total_driving_hours"]) <= 0.01 * len(logs) + 1e-9
     return events, plan

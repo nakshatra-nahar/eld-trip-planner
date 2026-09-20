@@ -14,12 +14,12 @@ import {
   REMARKS,
   SHEET,
   STATUS_ORDER,
-  bracketPath,
   buildDutyPath,
   restartState,
   splitShippingDoc,
   layoutRemarks,
   leaderPath,
+  remarkMarkPath,
   minutesByStatus,
   recapValues,
   roundedMinutesByStatus,
@@ -395,7 +395,7 @@ export function LogSheet({ log, header, dayCount, tripLabel, note, tzAbbr, ref, 
         {log.remarks.map((rm, i) => (
           <path
             key={`b${rm.start_minute}-${i}`}
-            d={bracketPath(rm.start_minute, rm.end_minute)}
+            d={remarkMarkPath(rm)}
             fill="none"
             stroke={INK}
             strokeWidth={1.8}

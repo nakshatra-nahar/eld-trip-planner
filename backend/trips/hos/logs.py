@@ -383,6 +383,7 @@ class _PlanBuilder:
         raw_miles = [sum(self._piece_miles(p) for p in day) for day in by_day]
         tenths = _largest_remainder([m * 10 for m in raw_miles], round(total_miles * 10))
 
+        flags = self._flags(timeline)
         logs = []
         cycle = self.initial_cycle
         for day, pieces in enumerate(by_day):
@@ -393,7 +394,7 @@ class _PlanBuilder:
                 ev = p.event
                 if ev is not None and ev.kind == R.Kind.RESTART and self._trip_minute(p, p.end) == ev.end:
                     cycle = 0.0
-            logs.append(self._sheet(day, pieces, tenths[day] / 10, cycle, names))
+            logs.append(self._sheet(day, pieces, tenths[day] / 10, cycle, names, flags.get(day, [])))
         return logs
 
     def _piece_miles(self, p: _Piece) -> float:
@@ -404,7 +405,40 @@ class _PlanBuilder:
         m1 = self._drive_state(ev, self._trip_minute(p, p.end))[0]
         return m1 - m0
 
-    def _sheet(self, day: int, pieces: list[_Piece], miles: float, cycle: float, names: dict) -> dict:
+    def _flags(self, timeline: list[dict]) -> dict[int, list[dict]]:
+        """Zero-length remarks (start_minute == end_minute) marking where the trip's duty begins
+        and ends, by sheet index. Every change of duty status needs a location (FMCSA p.17),
+        including the first change from off duty and the final change back to it."""
+        flags: dict[int, list[dict]] = {}
+        on_duty = [i for i, ev in enumerate(self.events) if ev.is_on_duty]
+        if not on_duty:
+            return flags
+        first = self.events[0]
+        if first.is_on_duty:  # else the trip opens off duty (a restart) and its remark covers it
+            what = "driving" if first.status == R.D else "on duty"
+            day = self._day_of(0)
+            flags.setdefault(day, []).append({
+                "start_minute": self.start_offset - day * MINUTES_PER_DAY,
+                "end_minute": self.start_offset - day * MINUTES_PER_DAY,
+                "status": first.status,
+                **_remark_place(timeline[0]["start_location"]),
+                "note": f"Start of trip: {what}",
+            })
+        last = on_duty[-1]
+        end = self.start_offset + self.events[last].end
+        day = (end - 1) // MINUTES_PER_DAY  # an end at midnight stays on the sheet it closes (24:00)
+        flags.setdefault(day, []).append({
+            "start_minute": end - day * MINUTES_PER_DAY,
+            "end_minute": end - day * MINUTES_PER_DAY,
+            "status": R.OFF,
+            **_remark_place(timeline[last]["end_location"]),
+            "note": "End of trip: off duty",
+        })
+        return flags
+
+    def _sheet(
+        self, day: int, pieces: list[_Piece], miles: float, cycle: float, names: dict, flags: list[dict],
+    ) -> dict:
         segments: list[dict] = []
         minutes: dict[str, int] = dict.fromkeys(R.STATUSES, 0)
         for p in pieces:
@@ -417,20 +451,9 @@ class _PlanBuilder:
         hundredths = _largest_remainder([minutes[s] * 100 / 60 for s in R.STATUSES], 2400)
         totals = {s: h / 100 for s, h in zip(R.STATUSES, hundredths, strict=True)}
 
-        remarks = []
-        trip_start = self.start_offset - day * MINUTES_PER_DAY  # sheet minute of the trip start
+        remarks = [dict(flag) for flag in flags]
         for p in pieces:
             ev = p.event
-            if ev is not None and ev is self.events[0] and ev.kind == R.Kind.DRIVE and p.start == trip_start:
-                # A change of duty status needs a location (FMCSA p.17); with inspections off
-                # the trip opens OFF -> D with no pre-trip remark to carry it.
-                remarks.append({
-                    "start_minute": p.start,
-                    "end_minute": min(p.start + 1, p.end),
-                    "status": ev.status,
-                    **_remark_place(names[id(ev)]),
-                    "note": "Start of trip / on duty",
-                })
             if ev is None or ev.kind == R.Kind.DRIVE:
                 continue
             continued = self._trip_minute(p, p.start) > ev.start
@@ -442,6 +465,8 @@ class _PlanBuilder:
                 **_remark_place(names[id(ev)]),
                 "note": note,
             })
+        # Time order; a flag sorts before a bracket that starts at the same minute.
+        remarks.sort(key=lambda r: (r["start_minute"], r["end_minute"]))
 
         first, last = pieces[0], pieces[-1]
         used = _hours(cycle)

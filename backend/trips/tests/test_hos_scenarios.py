@@ -81,9 +81,15 @@ def test_short_trip_same_day():
     assert log["on_duty_hours"] == 7.75
     assert log["cycle_hours_used"] == 17.75  # 10 + 7.75
     assert log["cycle_hours_available"] == 52.25
-    assert [r["note"] for r in log["remarks"]] == [
-        "Pre-trip inspection", "Pickup", "Drop-off", "Post-trip inspection",
+    assert [(r["start_minute"], r["end_minute"], r["status"], r["note"]) for r in log["remarks"]] == [
+        (480, 480, "ON", "Start of trip: on duty"),
+        (480, 510, "ON", "Pre-trip inspection"),
+        (510 + 60, 630, "ON", "Pickup"),
+        (870, 930, "ON", "Drop-off"),
+        (930, 945, "ON", "Post-trip inspection"),
+        (945, 945, "OFF", "End of trip: off duty"),
     ]
+    assert log["remarks"][-1]["location"] == log["remarks"][-2]["location"]  # at the drop-off
     s = plan["summary"]
     assert (s["start_time"], s["end_time"]) == ("2026-09-21T08:00", "2026-09-21T15:45")
     assert s["total_miles"] == 250.0 and s["num_days"] == 1
@@ -454,12 +460,31 @@ def test_fuel_stop_replaces_a_break_when_nearly_due():
 
 
 def test_trip_start_remark_without_inspections():
-    """With inspections off the OFF -> D change at the trip start still gets a location remark."""
+    """With inspections off the OFF -> D change at the trip start still gets a location flag,
+    and the final change back to OFF gets one at the drop-off, on the sheet where it happens."""
     trip = [straight(100), straight(700)]
     plan = build_plan(trip, datetime(2026, 1, 5, 23, 59), 20, PlanOptions(include_inspections=False), namer)
     (first,) = plan["daily_logs"][0]["remarks"]
-    assert (first["start_minute"], first["end_minute"], first["status"]) == (1439, 1440, "D")
-    assert first["note"] == "Start of trip / on duty"
+    assert (first["start_minute"], first["end_minute"], first["status"]) == (1439, 1439, "D")
+    assert first["note"] == "Start of trip: driving"
+    assert first["location"] == plan["timeline"][0]["start_location"]["name"]
+    last = plan["daily_logs"][-1]["remarks"][-1]
+    end = datetime.fromisoformat(plan["summary"]["end_time"])
+    assert (last["start_minute"], last["end_minute"]) == (end.hour * 60 + end.minute,) * 2
+    assert (last["status"], last["note"]) == ("OFF", "End of trip: off duty")
+    assert last["location"] == plan["timeline"][-1]["end_location"]["name"]
+    assert audit_plan(plan) == []
+
+
+def test_trip_end_flag_at_midnight_stays_on_the_last_sheet():
+    """Duty that ends exactly at 24:00 is flagged at minute 1440 of that sheet, not on a new one."""
+    trip = [straight(0), straight(60)]  # pickup 1 h, drive 1 h, drop-off 1 h
+    plan = build_plan(trip, datetime(2026, 1, 5, 21, 0), 0, PlanOptions(include_inspections=False), namer)
+    assert plan["summary"]["num_days"] == 1
+    flags = [r for r in plan["daily_logs"][0]["remarks"] if r["start_minute"] == r["end_minute"]]
+    assert [(r["start_minute"], r["note"]) for r in flags] == [
+        (1260, "Start of trip: on duty"), (1440, "End of trip: off duty"),
+    ]
 
 
 # ----- restart placement, time off before the start, fuel placement, warning texts -----

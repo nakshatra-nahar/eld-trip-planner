@@ -81,8 +81,9 @@ def api_exception_handler(exc: Exception, context: dict[str, Any]) -> Response |
         return Response(error_body("Request body is not valid JSON.", "validation_error"), status=400)
 
     if isinstance(exc, exceptions.Throttled):
-        response = exception_handler(exc, context)  # sets the Retry-After header
-        wait = f" Try again in {int(exc.wait) + 1} s." if exc.wait is not None else " Try again shortly."
+        response = exception_handler(exc, context)  # sets the Retry-After header (whole seconds)
+        retry_after = response.headers.get("Retry-After")
+        wait = f" Try again in {retry_after} s." if retry_after else " Try again shortly."
         response.data = error_body(f"Too many requests from your network.{wait}", "rate_limited")
         return response
 

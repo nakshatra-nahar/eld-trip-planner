@@ -103,15 +103,23 @@ export function withoutRoad(location: string): string {
 }
 
 /**
- * One display form for every place name in the app (overview, itinerary, map, logs):
- * "Saint Louis, MO" and "St. Louis, MO" both become "St. Louis, MO", and interstates are
- * written the way drivers read them ("I 44" -> "I-44"). With `withRoad: false` the
- * "I-44 near" prefix is dropped, leaving the city/state an FMCSA remark needs.
+ * Interstate and US-highway refs the way drivers read them: "I 35E" -> "I-35E",
+ * "US 287" -> "US-287". Other text is left alone.
+ */
+export function roadRefs(text: string): string {
+  return text.replace(/\b(I|US)[\s-]?(\d{1,3}[A-Z]?)\b/g, '$1-$2')
+}
+
+/**
+ * One display form for every place name in the app (overview, itinerary, map, logs, directions):
+ * "Saint Louis, MO" and "St. Louis, MO" both become "St. Louis, MO", and road refs are
+ * written the way drivers read them ("I 44" -> "I-44", "US 287" -> "US-287"). With
+ * `withRoad: false` the "I-44 near" prefix is dropped, leaving the city/state an FMCSA remark needs.
  */
 export function placeLabel(name: string, { withRoad = true }: { withRoad?: boolean } = {}): string {
   let s = (name || '').trim().replace(/\s+/g, ' ')
   if (!withRoad) s = withoutRoad(s)
-  return s.replace(/\bSaint\s+(?=[A-Z])/g, 'St. ').replace(/\bI[\s-]?(\d{1,3})\b/g, 'I-$1')
+  return roadRefs(s.replace(/\bSaint\s+(?=[A-Z])/g, 'St. '))
 }
 
 /** Minutes between two wall-clock strings. */

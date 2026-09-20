@@ -18,7 +18,7 @@ import { formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import { prefersReducedMotion } from '../../lib/motion'
 import { loadMaplibre } from './maplibre'
 import { loadMapStyle } from './mapStyle'
-import { MAP_LOAD_TIMEOUT_MS, type MapFailure, mapFailureOf, pageSupportsWebGL2 } from './mapSupport'
+import { MAP_LOAD_TIMEOUT_MS, type MapFailure, mapFailureOf, pageSupportsWebGL2, tilesDrawn } from './mapSupport'
 import { MapLegend } from './MapLegend'
 import { EndpointPin, StopMarker } from './markers'
 import {
@@ -128,10 +128,10 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
   const mapRef = useRef<MapRef>(null)
   const legendRef = useRef<HTMLDivElement>(null)
   // `ready`: the map exists and its style is parsed, so the camera can frame the route (tiles may
-  // still be downloading). `tilesLoaded`: MapLibre's `load`, i.e. the first view is fully drawn.
+  // still be downloading). `tilesLoaded`: the first view is fully drawn (`load`, `idle` or `sourcedata`).
   const [ready, setReady] = useState(false)
   const [tilesLoaded, setTilesLoaded] = useState(false)
-  // No `load` after MAP_LOAD_TIMEOUT_MS: "Loading map…" becomes a slow-connection note.
+  // No tiles drawn after MAP_LOAD_TIMEOUT_MS: "Loading map…" becomes a slow-connection note.
   const [tilesSlow, setTilesSlow] = useState(false)
   // Set when the map cannot be drawn at all (no WebGL 2, or MapLibre failed to start).
   const [failure, setFailure] = useState<MapFailure | null>(() => (pageSupportsWebGL2() ? null : 'webgl'))
@@ -287,6 +287,14 @@ export function TripMap({ plan, preview, focus, selectedStopId, onSelectStop, lo
           onLoad={(e) => {
             onMapReady(e.target)
             setTilesLoaded(true)
+          }}
+          // `load` alone sometimes leaves the pill up in Chromium: any tiles-drawn signal clears it.
+          onIdle={(e) => {
+            onMapReady(e.target)
+            if (!tilesLoaded && tilesDrawn(e)) setTilesLoaded(true)
+          }}
+          onSourceData={(e) => {
+            if (!tilesLoaded && tilesDrawn(e)) setTilesLoaded(true)
           }}
           onZoomEnd={(e) => setView({ map: e.target, zoom: e.viewState.zoom })}
           onError={(e) => {

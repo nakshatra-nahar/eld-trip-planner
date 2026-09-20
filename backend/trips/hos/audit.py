@@ -138,7 +138,10 @@ def audit_plan(plan: dict) -> list[str]:
             if abs(log["totals"][status] - mins / 60) > 0.01 + _EPS:
                 problems.append(f"{tag}: {status} total {log['totals'][status]} vs {mins / 60:.4f} h")
         for r in log["remarks"]:
-            if not 0 <= r["start_minute"] < r["end_minute"] <= 1440:
+            # A bracket spans a period; a flag (start == end) marks the trip's first or last change.
+            flag = r["note"].startswith(("Start of trip", "End of trip"))
+            zero = r["start_minute"] == r["end_minute"]
+            if not 0 <= r["start_minute"] <= r["end_minute"] <= 1440 or zero != flag:
                 problems.append(f"{tag}: remark out of range {r}")
         miles_units += round(log["total_miles"] * 10)
     if miles_units != round(summary["total_miles"] * 10):

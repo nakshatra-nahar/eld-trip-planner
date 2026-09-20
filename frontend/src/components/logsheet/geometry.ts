@@ -136,6 +136,29 @@ export function bracketPath(startMinute: number, endMinute: number): string {
   return `M${r(x1)} ${top} V${bottom} H${r(x2)} V${top}`
 }
 
+/** A zero-length remark: the trip's first change from off duty or its last change back to it. */
+export function isFlag(remark: Pick<LogRemark, 'start_minute' | 'end_minute'>): boolean {
+  return remark.end_minute <= remark.start_minute
+}
+
+/** Size of a flag's 45-degree tick, in SVG units along each axis. */
+export const FLAG_TICK = 6
+
+/**
+ * Flag for a change of duty status at one instant (as drivers mark it on paper): a stem from
+ * the remarks ruler down to the bracket line, then a short 45-degree tick parallel to the labels.
+ */
+export function flagPath(minute: number): string {
+  const x = r(minuteToX(minute))
+  const bottom = REMARKS.bracketTop + REMARKS.bracketDepth
+  return `M${x} ${REMARKS.rulerBottom} V${bottom} l${FLAG_TICK} ${FLAG_TICK}`
+}
+
+/** The mark under a remark on the ruler: a flag for an instant, else a bracket over its span. */
+export function remarkMarkPath(remark: Pick<LogRemark, 'start_minute' | 'end_minute'>): string {
+  return isFlag(remark) ? flagPath(remark.start_minute) : bracketPath(remark.start_minute, remark.end_minute)
+}
+
 // ---------- Totals ----------
 
 export type StatusMinutes = Record<DutyStatus, number>
@@ -205,7 +228,7 @@ export interface RemarkGroup {
   place: string
   /** Activities in time order, in paper-log shorthand, e.g. "Post-trip / 10-h rest (SB)". */
   note: string
-  /** The remarks this label covers; each still gets its own bracket. */
+  /** The remarks this label covers; each still gets its own bracket (or flag). */
   members: LogRemark[]
 }
 

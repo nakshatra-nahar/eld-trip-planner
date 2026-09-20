@@ -239,6 +239,8 @@ def test_plan_is_rate_limited_with_api_error_and_retry_after(client, monkeypatch
     body = assert_api_error(resp, 429, "rate_limited")
     assert "Too many requests" in body["error"]
     assert int(resp["Retry-After"]) > 0
+    # The message quotes exactly the header's number.
+    assert body["error"].endswith(f"Try again in {resp['Retry-After']} s.")
 
 
 def test_plan_rate_limit_is_per_client_ip(client, monkeypatch):

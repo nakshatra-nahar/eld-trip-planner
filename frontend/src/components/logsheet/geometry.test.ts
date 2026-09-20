@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { LogRemark, LogSegment } from '../../types/api'
 import {
+  bracketPath,
   buildDutyPath,
+  FLAG_TICK,
+  flagPath,
   groupRemarks,
+  isFlag,
   labelCorners,
   layoutRemarks,
   leaderPoints,
+  minuteToX,
   minutesByStatus,
   recapValues,
+  remarkMarkPath,
   REMARK_MIN_FONT,
   REMARKS,
   restartState,
@@ -101,9 +107,19 @@ const longNames = [
   remark(1425, 1440, 'Truth or Consequences, NM', 'Post-trip inspection'),
 ]
 
+// Trip start and end flags (zero-length remarks) crowded by stops and by midnight.
+const withFlags = [
+  remark(0, 0, 'Chicago, IL', 'Start of trip: driving', 'D'),
+  remark(20, 50, 'Joliet, IL', 'Fuel'),
+  remark(35, 65, 'Morris, IL', '30-minute break', 'OFF'),
+  remark(1380, 1440, 'Dallas, TX', 'Drop-off'),
+  remark(1440, 1440, 'Dallas, TX', 'End of trip: off duty', 'OFF'),
+]
+
 describe.each([
   ['crowded', crowded],
   ['long names', longNames],
+  ['flags', withFlags],
 ])('layoutRemarks (%s)', (_, remarks) => {
   const layout = layoutRemarks(remarks, { fontSize: 10.5, angle: 45 })
 
@@ -151,6 +167,43 @@ describe.each([
         expect(y).toBeLessThanOrEqual(REMARKS.bottom + descender)
       }
     }
+  })
+})
+
+describe('flags (zero-length remarks)', () => {
+  const nums = (d: string) => (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number)
+
+  it('marks an instant with a stem from the ruler and a 45-degree tick, not a bracket', () => {
+    const d = flagPath(600)
+    const x = minuteToX(600)
+    expect(d).toBe(`M${x} ${REMARKS.rulerBottom} V${REMARKS.bracketTop + REMARKS.bracketDepth} l${FLAG_TICK} ${FLAG_TICK}`)
+    const [, , , dx, dy] = nums(d)
+    expect(dx).toBe(dy) // 45 degrees, parallel to the labels
+    expect(d).not.toContain('H') // no cup
+  })
+
+  it('uses a flag for start == end and a bracket otherwise', () => {
+    expect(isFlag(remark(945, 945, 'Dallas, TX', 'End of trip: off duty', 'OFF'))).toBe(true)
+    expect(isFlag(remark(930, 945, 'Dallas, TX', 'Post-trip inspection'))).toBe(false)
+    expect(remarkMarkPath(remark(945, 945, 'Dallas, TX', 'End of trip: off duty', 'OFF'))).toBe(flagPath(945))
+    expect(remarkMarkPath(remark(930, 945, 'Dallas, TX', 'Post-trip inspection'))).toBe(bracketPath(930, 945))
+  })
+
+  it('stays on the sheet at midnight and never widens into a cup', () => {
+    for (const m of [0, 1440]) {
+      const [x0, , , dx] = nums(flagPath(m))
+      expect(x0).toBe(minuteToX(m))
+      expect(x0 + dx).toBeLessThan(REMARKS.rightLimit)
+    }
+  })
+
+  it('shares one label with the stop it ends, and each member keeps its own mark', () => {
+    const groups = groupRemarks(withFlags)
+    const end = groups[groups.length - 1]
+    expect(end.note).toBe('Drop-off / End of trip: off duty')
+    expect(end.members.map(isFlag)).toEqual([false, true])
+    expect(groups[0].note).toBe('Start of trip: driving')
+    expect(groups[0].start_minute).toBe(0)
   })
 })
 

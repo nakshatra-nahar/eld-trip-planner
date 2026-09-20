@@ -15,11 +15,11 @@ import {
   Signpost,
   Undo2,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { formatDuration, formatMiles, placeLabel } from '../../lib/format'
 import type { Instruction, PlanResponse, RouteLeg } from '../../types/api'
-import { groupSteps, interstateOf, roadCaption } from './directions'
+import { groupSteps, interstateOf, mergeRepeatedSteps, roadCaption } from './directions'
 
 const MANEUVER_ICONS = {
   depart: Navigation,
@@ -88,7 +88,8 @@ function LegDirections({
   defaultOpen: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const empty = leg.distance_miles < 0.1 || leg.instructions.length === 0
+  const steps = useMemo(() => mergeRepeatedSteps(leg.instructions), [leg.instructions])
+  const empty = leg.distance_miles < 0.1 || steps.length === 0
   const id = `leg-${index}-steps`
   return (
     <section className="overflow-hidden rounded-xl ring-1 ring-ink-200">
@@ -114,7 +115,7 @@ function LegDirections({
             </span>
             <span className="tabular block font-mono text-xs text-ink-500">
               {formatMiles(leg.distance_miles)} · {formatDuration(leg.duration_hours)} driving ·{' '}
-              {leg.instructions.length} steps
+              {steps.length} steps
             </span>
           </span>
           <ChevronDown className={cn('size-4 shrink-0 text-ink-400 transition-transform', open && 'rotate-180')} aria-hidden />
@@ -125,7 +126,7 @@ function LegDirections({
           <p className="px-4 py-4 text-sm text-ink-500">The truck is already at the pickup. No driving on this leg.</p>
         ) : (
           <ol className="divide-y divide-ink-100">
-            {groupSteps(leg.instructions).map((item, i) =>
+            {groupSteps(steps).map((item, i) =>
               item.kind === 'local' ? (
                 <li key={`local-${i}`}>
                   <details className="group">

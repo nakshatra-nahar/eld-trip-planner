@@ -109,7 +109,7 @@ The `road_at_mile` helper returns the route step's road name/ref so remarks can 
    - **segments:** merge consecutive same-status pieces, covering 0-1440;
    - **totals:** hours, summing to 24;
    - **total_miles:** driving miles that fall on that date, splitting a driving event across midnight by its profile;
-   - **remarks:** one per non-driving event piece on that sheet (not the padding OFF), with its start/end minute on the sheet, the location name ("City, ST", or "I 80 near City, ST") with its `city` and `road` parts, and a note. A piece continued from the previous day gets a note ending "(cont.)". When the trip opens with driving (inspections off), the OFF→D change also gets a 1-minute remark "Start of trip / on duty", since every change of duty status needs a location (FMCSA p.17);
+   - **remarks:** one per non-driving event piece on that sheet (not the padding OFF), with its start/end minute on the sheet, the location name ("City, ST", or "I 80 near City, ST") with its `city` and `road` parts, and a note. A piece continued from the previous day gets a note ending "(cont.)". Every change of duty status needs a location (FMCSA p.17), so the first change from off duty and the final change back to it also get a zero-length remark (a flag, `start_minute == end_minute`): "Start of trip: driving" (or "Start of trip: on duty") at the start location, and "End of trip: off duty" at the drop-off, on the sheet where it happens (minute 1440 when it ends at midnight). Remarks are in time order;
    - **on_duty_hours:** D + ON;
    - **cycle_hours_used:** at the end of the day (initial + trip on-duty; 0 after a restart, then accumulating);
    - **cycle_hours_available:** 70 − used, floored at 0;

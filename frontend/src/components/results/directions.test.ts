@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Instruction } from '../../types/api'
-import { groupSteps, interstateOf, roadCaption } from './directions'
+import { groupSteps, interstateOf, mergeRepeatedSteps, roadCaption } from './directions'
 
 const step = (maneuver: string, text: string, road: string, distance_miles: number): Instruction => ({
   text,
@@ -50,6 +50,7 @@ describe('interstateOf', () => {
     expect(interstateOf({ road: 'I 55' })).toBe('I-55')
     expect(interstateOf({ road: 'I-80 W' })).toBe('I-80')
     expect(interstateOf({ road: 'Interstate 10' })).toBe('I-10')
+    expect(interstateOf({ road: 'I 35E' })).toBe('I-35E')
     expect(interstateOf({ road: 'US 66' })).toBeNull()
     expect(interstateOf({ road: '' })).toBeNull()
   })
@@ -58,7 +59,7 @@ describe('interstateOf', () => {
     const toward = step('fork', 'Keep right toward I 5', 'US 101', 12)
     expect(interstateOf(toward)).toBeNull()
     expect(interstateOf(step('off ramp', 'Take the I 94 East exit toward Indiana', '', 0.5))).toBeNull()
-    expect(roadCaption(toward)).toBe('US 101')
+    expect(roadCaption(toward)).toBe('US-101')
   })
 })
 
@@ -106,6 +107,50 @@ describe('roadCaption', () => {
     expect(roadCaption(step('arrive', 'Arrive', 'Main St', 0))).toBeNull()
   })
   it('keeps a road the instruction does not mention', () => {
-    expect(roadCaption(step('fork', 'Keep right at the fork', 'US 287', 1))).toBe('US 287')
+    expect(roadCaption(step('fork', 'Keep right at the fork', 'US 287', 1))).toBe('US-287')
+  })
+})
+
+describe('mergeRepeatedSteps', () => {
+  const fork = (text: string, road: string, miles: number, modifier = 'slight left'): Instruction => ({
+    ...step('fork', text, road, miles),
+    modifier,
+  })
+
+  it('collapses the same instruction repeated at every fork into one row with the summed distance', () => {
+    const merged = mergeRepeatedSteps([
+      step('depart', 'Head south on Main St', 'Main St', 1),
+      fork('Keep left to stay on I 25 South', 'I 25', 55.72),
+      fork('Keep left to stay on I 25 South', 'I 25', 37.51),
+      fork('Keep left to stay on I-25 South', 'I 25', 43.2),
+      step('arrive', 'Arrive', '', 0),
+    ])
+    expect(merged.map((m) => m.maneuver)).toEqual(['depart', 'fork', 'arrive'])
+    expect(merged[1].text).toBe('Keep left to stay on I 25 South')
+    expect(merged[1].distance_miles).toBe(136.43)
+    expect(merged[1].duration_minutes).toBe(136.4)
+  })
+
+  it('merges the same maneuver onto the same road within half a mile and keeps the first text', () => {
+    const merged = mergeRepeatedSteps([
+      fork('Keep left to stay on US 287 toward East Lancaster Avenue', 'US 287', 0.02),
+      fork('Keep left to stay on US 287', 'US-287', 12),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].text).toBe('Keep left to stay on US 287 toward East Lancaster Avenue')
+    expect(merged[0].distance_miles).toBe(12.02)
+  })
+
+  it('keeps distinct or distant steps apart, and never merges a departure or arrival', () => {
+    const steps = [
+      fork('Keep left to stay on US 287', 'US 287', 0.8),
+      fork('Keep left toward Amarillo', 'US 287', 3), // same move and road, but 0.8 mi later
+      fork('Keep right toward Dallas', 'US 287', 0.1, 'slight right'), // another direction
+      step('turn', 'Turn left onto Elm St', 'Elm St', 0.1),
+      step('turn', 'Turn left onto Oak St', 'Oak St', 0.1), // another road
+      step('arrive', 'Arrive', '', 0),
+      step('arrive', 'Arrive', '', 0),
+    ]
+    expect(mergeRepeatedSteps(steps)).toEqual(steps)
   })
 })

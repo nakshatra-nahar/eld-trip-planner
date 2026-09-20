@@ -30,6 +30,14 @@ describe('placeLabel', () => {
     expect(placeLabel('St. Louis, MO')).toBe('St. Louis, MO')
     expect(placeLabel('I 44 near Joplin, MO')).toBe('I-44 near Joplin, MO')
   })
+  it('hyphenates lettered interstates and US highways, and nothing else', () => {
+    expect(placeLabel('Keep left onto I 35E South')).toBe('Keep left onto I-35E South')
+    expect(placeLabel('Keep right to stay on US 287')).toBe('Keep right to stay on US-287')
+    expect(placeLabel('US-287 near Amarillo, TX')).toBe('US-287 near Amarillo, TX')
+    expect(placeLabel('Take exit 32 onto I 84 East')).toBe('Take exit 32 onto I-84 East')
+    expect(placeLabel('Turn onto NE 45th Street')).toBe('Turn onto NE 45th Street')
+    expect(placeLabel('Continue on SR 30')).toBe('Continue on SR 30')
+  })
   it('drops the road for remarks', () => {
     expect(placeLabel('I 80 near Garrettsville, OH', { withRoad: false })).toBe('Garrettsville, OH')
     expect(placeLabel('Garrettsville, OH', { withRoad: false })).toBe('Garrettsville, OH')

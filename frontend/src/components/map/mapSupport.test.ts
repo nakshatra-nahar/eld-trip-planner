@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mapFailureOf, supportsWebGL2 } from './mapSupport'
+import { mapFailureOf, supportsWebGL2, tilesDrawn } from './mapSupport'
 
 const canvasWith = (getContext: () => unknown) => () => ({ getContext }) as unknown as HTMLCanvasElement
 
@@ -37,5 +37,25 @@ describe('mapFailureOf', () => {
 
   it('fails a running map whose WebGL context could not be restored', () => {
     expect(mapFailureOf({ target: {}, error: gpuError })).toBe('webgl')
+  })
+})
+
+describe('tilesDrawn', () => {
+  const map = (loaded: boolean) => ({ areTilesLoaded: () => loaded })
+
+  it('clears "Loading map…" on load or idle', () => {
+    expect(tilesDrawn({ type: 'load' })).toBe(true)
+    expect(tilesDrawn({ type: 'idle', target: map(false) })).toBe(true)
+  })
+
+  it('clears it on a sourcedata event once every visible tile has loaded', () => {
+    expect(tilesDrawn({ type: 'sourcedata', isSourceLoaded: true, sourceDataType: 'content', target: map(true) })).toBe(true)
+  })
+
+  it('keeps it while tiles are still arriving, or for metadata alone', () => {
+    expect(tilesDrawn({ type: 'sourcedata', isSourceLoaded: true, target: map(false) })).toBe(false)
+    expect(tilesDrawn({ type: 'sourcedata', isSourceLoaded: false, target: map(true) })).toBe(false)
+    expect(tilesDrawn({ type: 'sourcedata', isSourceLoaded: true, sourceDataType: 'metadata', target: map(true) })).toBe(false)
+    expect(tilesDrawn({ type: 'styledata', target: map(true) })).toBe(false)
   })
 })

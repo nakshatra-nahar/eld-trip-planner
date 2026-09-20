@@ -13,7 +13,7 @@ const SHORT_STEP_MILES = 0.5
 
 export type StepItem = { kind: 'step'; step: Instruction } | { kind: 'local'; steps: Instruction[] }
 
-const INTERSTATE = /\b(?:I|Interstate)[\s-]?(\d{1,3})\b/
+const INTERSTATE = /\b(?:I|Interstate)[\s-]?(\d{1,3}[A-Z]?)\b/
 
 /**
  * "I-55" when the step itself is on an interstate, else null. Only the step's own road counts:
@@ -45,6 +45,42 @@ export function roadCaption(step: Pick<Instruction, 'road' | 'text' | 'maneuver'
   const parts = road.split(/[;,/]/).map((part) => part.trim().replace(/\s+[NSEW]$/, ''))
   if (shield && parts.every((part) => part === shield)) return null
   return road
+}
+
+/** Steps this close together that make the same move onto the same road read as one. */
+const REPEAT_MILES = 0.5
+
+const sameText = (a: Instruction, b: Instruction) => placeLabel(a.text).toLowerCase() === placeLabel(b.text).toLowerCase()
+const sameMove = (a: Instruction, b: Instruction) =>
+  a.maneuver === b.maneuver &&
+  a.modifier === b.modifier &&
+  placeLabel(a.road) !== '' &&
+  placeLabel(a.road).toLowerCase() === placeLabel(b.road).toLowerCase() &&
+  a.distance_miles <= REPEAT_MILES
+
+/**
+ * Collapses consecutive near-duplicate instructions into one row with their summed distance and
+ * time: the same text ("Keep left to stay on I-25 South" at every fork of a long run), or the same
+ * maneuver onto the same road within REPEAT_MILES. The first step's text is kept (it has the
+ * "toward ..." sign); departures and arrivals are never merged.
+ */
+export function mergeRepeatedSteps(steps: readonly Instruction[]): Instruction[] {
+  const out: Instruction[] = []
+  for (const step of steps) {
+    const prev = out[out.length - 1]
+    const fixed = (st: Instruction) => st.maneuver === 'depart' || st.maneuver === 'arrive'
+    if (prev && !fixed(prev) && !fixed(step) && (sameText(prev, step) || sameMove(prev, step))) {
+      out[out.length - 1] = {
+        ...prev,
+        road: prev.road || step.road,
+        distance_miles: Math.round((prev.distance_miles + step.distance_miles) * 100) / 100,
+        duration_minutes: Math.round((prev.duration_minutes + step.duration_minutes) * 10) / 10,
+      }
+    } else {
+      out.push(step)
+    }
+  }
+  return out
 }
 
 /**
